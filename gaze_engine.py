@@ -27,17 +27,44 @@ import threading
 import time
 import urllib.request
 
-import cv2
 import numpy as np
 import mediapipe as mp
 from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision as mp_vision
+
+# Both camera backends are optional: the laptop has OpenCV but no
+# picamera2, the Pi has picamera2 (and OpenCV is unnecessary there).
+# Importing them defensively means the same file runs on both machines
+# with no edits -- see _open_camera() below for the selection logic.
+try:
+    import cv2
+except ImportError:
+    cv2 = None
+
+try:
+    from picamera2 import Picamera2
+except ImportError:
+    Picamera2 = None
 
 MODEL_PATH = "face_landmarker.task"
 MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/face_landmarker/"
     "face_landmarker/float16/1/face_landmarker.task"
 )
+
+# --- Raspberry Pi camera settings -----------------------------------
+# The Arducam OV9281 needs exposure set manually: libcamera's
+# auto-exposure doesn't work well on this mono sensor, so frames come
+# out nearly black at default settings. These values were found during
+# hardware bring-up and gave 100% face detection in benchmarking.
+# EXPECT TO LOWER THE GAIN once the IR LEDs are added -- they'll
+# provide illumination, and high gain adds noise that hurts tracking.
+PI_SHUTTER_US = 20000   # microseconds (20ms)
+PI_ANALOGUE_GAIN = 8.0
+# 640x400 measured ~14 fps end-to-end on a Pi 4 (MediaPipe inference is
+# the bottleneck at ~68ms/frame, capture is only ~2ms). Raising this
+# resolution will slow things down without helping tracking much.
+CAPTURE_WIDTH, CAPTURE_HEIGHT = 640, 400
 
 # Landmark indices, confirmed directly from MediaPipe's own connection
 # graph -- see gaze_test.py for how these were verified.
@@ -81,6 +108,103 @@ def _compute_gaze_feature(landmarks, w, h):
     rfx, rfy = _normalized_iris_position(landmarks, RIGHT_IRIS_CENTER, RIGHT_EYE_CONTOUR, w, h)
     lfx, lfy = _normalized_iris_position(landmarks, LEFT_IRIS_CENTER, LEFT_EYE_CONTOUR, w, h)
     return (rfx + lfx) / 2, (rfy + lfy) / 2
+
+
+def _draw_dot(frame, cx, cy, radius=4, color=(0, 255, 0)):
+    """Draws a small filled square marker on an RGB numpy frame.
+
+    Uses plain numpy rather than cv2.circle so the live preview works
+    on the Pi, where OpenCV isn't necessarily installed (picamera2
+    handles capture there, so OpenCV would be dead weight).
+    """
+    h, w = frame.shape[:2]
+    y0, y1 = max(0, cy - radius), min(h, cy + radius + 1)
+    x0, x1 = max(0, cx - radius), min(w, cx + radius + 1)
+    if y0 < y1 and x0 < x1:
+        frame[y0:y1, x0:x1] = color
+
+
+# ---------------------------------------------------------------------
+# Camera backends
+# ---------------------------------------------------------------------
+# Two interchangeable classes with the same three methods (read, close,
+# and a constructor that raises if unavailable). The capture loop below
+# doesn't know or care which one it got -- that's what lets the same
+# code run on the laptop and the Pi.
+#
+# Both return frames as RGB numpy arrays, already mirrored, so anything
+# downstream (MediaPipe, the preview) sees an identical format.
+
+class _OpenCVCamera:
+    """Laptop/USB webcam via OpenCV. Used when picamera2 isn't present."""
+
+    name = "OpenCV webcam"
+
+    def __init__(self):
+        if cv2 is None:
+            raise RuntimeError("OpenCV is not installed")
+        self._cap = cv2.VideoCapture(0)
+        if not self._cap.isOpened():
+            raise RuntimeError("Could not open webcam via OpenCV")
+
+    def read(self):
+        ok, frame = self._cap.read()
+        if not ok:
+            return None
+        frame = cv2.flip(frame, 1)  # mirror, so it feels like a mirror
+        return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+    def close(self):
+        self._cap.release()
+
+
+class _PiCamera:
+    """Raspberry Pi CSI camera (Arducam OV9281) via picamera2.
+
+    OpenCV's VideoCapture cannot read libcamera-based CSI cameras at
+    all, which is why this separate backend exists rather than just
+    passing a different device index.
+    """
+
+    name = "Raspberry Pi camera (picamera2)"
+
+    def __init__(self):
+        if Picamera2 is None:
+            raise RuntimeError("picamera2 is not installed")
+        self._picam = Picamera2()
+        config = self._picam.create_preview_configuration(
+            main={"size": (CAPTURE_WIDTH, CAPTURE_HEIGHT), "format": "RGB888"}
+        )
+        self._picam.configure(config)
+        self._picam.set_controls({
+            "ExposureTime": PI_SHUTTER_US,
+            "AnalogueGain": PI_ANALOGUE_GAIN,
+        })
+        self._picam.start()
+        time.sleep(2)  # let exposure settle before the first frames
+
+    def read(self):
+        frame = self._picam.capture_array()
+        return frame[:, ::-1]  # mirror horizontally (numpy, no OpenCV needed)
+
+    def close(self):
+        self._picam.stop()
+
+
+def _open_camera():
+    """Returns a working camera backend, or None if neither is usable.
+
+    Tries the Pi camera first: if picamera2 imported successfully we're
+    almost certainly on a Pi, where it's the only option that works.
+    """
+    for backend in (_PiCamera, _OpenCVCamera):
+        try:
+            camera = backend()
+            print(f"[GazeEngine] Using {backend.name}")
+            return camera
+        except Exception as e:
+            print(f"[GazeEngine] {backend.name} unavailable: {e}")
+    return None
 
 
 class GazeEngine:
@@ -137,21 +261,22 @@ class GazeEngine:
             self._running = False
             return
 
-        cap = cv2.VideoCapture(0)
-        if not cap.isOpened():
-            print("[GazeEngine] Could not open the webcam. Falling back to mouse-only.")
+        camera = _open_camera()
+        if camera is None:
+            print("[GazeEngine] No usable camera found. Falling back to mouse-only.")
             self._camera_ok = False
             self._running = False
             return
 
         start_time = time.time()
         while self._running:
-            ok, frame = cap.read()
-            if not ok:
+            rgb = camera.read()
+            if rgb is None:
                 continue
-            frame = cv2.flip(frame, 1)
-            h, w = frame.shape[:2]
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            h, w = rgb.shape[:2]
+            # MediaPipe needs a contiguous array; mirroring with numpy
+            # slicing produces a view, not a copy, so make it explicit.
+            rgb = np.ascontiguousarray(rgb)
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
             timestamp_ms = int((time.time() - start_time) * 1000)
             result = landmarker.detect_for_video(mp_image, timestamp_ms)
@@ -176,13 +301,13 @@ class GazeEngine:
                 landmarks = result.face_landmarks[0]
                 for idx in (RIGHT_IRIS_CENTER, LEFT_IRIS_CENTER):
                     lm = landmarks[idx]
-                    cv2.circle(debug_frame, (int(lm.x * w), int(lm.y * h)), 4, (0, 255, 0), -1)
+                    _draw_dot(debug_frame, int(lm.x * w), int(lm.y * h))
 
             with self._lock:
                 self._latest_feature = feature
                 self._latest_debug_frame = debug_frame
 
-        cap.release()
+        camera.close()
 
     # ---- public API used by the Kivy app ------------------------------
     def is_camera_ok(self):
