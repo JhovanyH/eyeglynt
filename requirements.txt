@@ -1,0 +1,5 @@
+kivy>=2.3.0
+pyttsx3>=2.90
+mediapipe>=0.10.30
+opencv-python>=4.9.0
+numpy>=1.26.0
