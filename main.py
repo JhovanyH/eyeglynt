@@ -1,27 +1,25 @@
 """
-EyeGlynt - Prototype On-Screen Interface
-=========================================
-This is a starter version of the Keyboard Interface and Quick-Fire
-Interface described in Chapter III of your thesis (Figures 29-31).
+EyeGlynt - On-Screen Interface
+==============================
+The Calibration, Keyboard (Figure 29) and Quick-Fire (Figures 30-31)
+screens of EyeGlynt, built with Kivy.
 
-It runs RIGHT NOW on your laptop (Windows/Mac/Linux) using your MOUSE
-to simulate the eye-gaze pointer, so you can build and test the whole
-interface before the camera + MediaPipe + PCCR gaze-tracking module is
-ready. Once that module exists, you only need to change ONE method
-(GazeManager.get_pointer_pos, near the bottom of section 3) to feed it
-real gaze coordinates instead of the mouse position -- nothing else in
-the UI needs to change.
+Every selectable element is a DwellButton: it selects only after the
+pointer stays on it for DWELL_TIME seconds (the Midas Touch solution).
+GazeManager decides where the pointer is:
+  - after a successful calibration, the horizontal position comes from
+    the eyes (gaze_engine.py) and the vertical position from the mouse,
+    until PCCR tracking is built;
+  - with no camera or no calibration, the mouse controls both, so the
+    device is never left unusable.
 
-SETUP
------
-    pip install -r requirements.txt
-    python main.py
-
-Controls: just move your mouse over a button and hold it there for
-~1.5 seconds (DWELL_TIME below) -- it fills up like a progress bar
-and then "selects", exactly like a gaze dwell-click will.
+RUN
+---
+    python main.py      (laptop: inside .venv; Pi: inside eyeglynt_env,
+                         started from the Pi's own screen)
 """
 
+import os
 import time
 
 import pyttsx3
@@ -37,9 +35,52 @@ from kivy.uix.image import Image
 from kivy.graphics.texture import Texture
 from kivy.properties import NumericProperty
 from kivy.clock import Clock
-from kivy.graphics import Color, Rectangle, Ellipse
+from kivy.graphics import Color, Rectangle, Ellipse, RoundedRectangle, Line, InstructionGroup
+from kivy.uix.widget import Widget
+from kivy.core.image import Image as CoreImage
 
 from gaze_engine import GazeEngine
+from icons import draw_icon
+
+
+def rgb(r, g, b, a=1.0):
+    """Converts 0-255 colour values (as read from the design) to Kivy's 0-1 range."""
+    return (r / 255, g / 255, b / 255, a)
+
+
+# Colours sampled directly from the pixels of Figure 29.
+FRAME_BG = rgb(58, 59, 64)       # device frame and screen background
+PANEL_BG = rgb(70, 71, 80)       # keyboard and word panels
+HEADER_BG = rgb(128, 128, 128)   # top title bar and bottom footer
+PURPLE = rgb(106, 31, 173)       # KEYBOARD tab, Speak, Clear, Backspace
+ORANGE = rgb(226, 112, 42)       # QUICK FIRES tab
+KEY_FACE = rgb(99, 98, 98)       # letter keys
+KEY_BORDER = rgb(154, 154, 154)  # thin outline around keys and panels
+PINK = rgb(226, 169, 241)        # Quick Access words
+GREEN = rgb(191, 236, 172)       # Common Words
+YELLOW = rgb(255, 235, 153)      # Phrases; Basic Needs tiles
+TILE_RED = rgb(250, 155, 155)    # Emergency tiles (Figures 30-31)
+TILE_ORANGE = rgb(252, 187, 117) # Pain tiles
+TILE_BLUE = rgb(163, 203, 250)   # People/Family tiles
+WHITE = rgb(255, 255, 255)
+DARK_TEXT = rgb(30, 30, 30)
+PLACEHOLDER = rgb(140, 140, 140)
+
+# Quick-Fire pictures (Mulberry Symbols, CC BY-SA 4.0; see
+# assets/symbols/CREDITS.md). The path is built from this file's own
+# location, so it works no matter which folder the app is started from.
+SYMBOL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "symbols")
+
+
+def _load_symbol(name):
+    """Loads assets/symbols/<name>.png as a Kivy texture. Returns None,
+    with a warning, if the file is missing: the tile then shows text only
+    instead of crashing the app."""
+    path = os.path.join(SYMBOL_DIR, f"{name}.png")
+    if not os.path.exists(path):
+        print(f"[Symbols] Missing {path}; showing text only")
+        return None
+    return CoreImage(path).texture
 
 # ---------------------------------------------------------------------------
 # 0. GLOBAL SETTINGS
@@ -89,22 +130,38 @@ class DwellButton(Button):
     """
     A button that fills up like a progress bar while the pointer rests on
     it, and fires `on_selected` once `dwell_time` has passed. This is the
-    dwell-time selection method from your Methodology (the fix for the
-    Midas Touch problem) -- built once here so both interfaces reuse it.
+    dwell-time selection method from the Methodology (the fix for the
+    Midas Touch problem), built once here so every screen reuses it.
 
     Set `repeatable=True` for buttons where holding the gaze in place
-    should keep re-firing (typing the same letter twice, like "food") --
-    after the first full `dwell_time` selection, it re-arms itself using
-    the shorter `repeat_time`, and keeps repeating for as long as the
-    pointer/gaze stays put, exactly like holding down a physical key.
-    Leave it False (the default) for anything where an accidental repeat
-    would be unsafe or annoying -- phrases, Speak, Clear, navigation.
+    should keep re-firing (typing the same letter twice, like "food"):
+    after each selection it re-arms itself with `repeat_time`, which is
+    equal to DWELL_TIME, for as long as the pointer stays on it, like
+    holding down a physical key. Leave it False (the default) wherever an
+    accidental repeat would be unsafe or annoying: phrases, Speak, Clear,
+    navigation.
+
+    Optional styling (used by the Figure 29 keyboard):
+      bg_color      flat rounded fill instead of Kivy's default grey button
+      border_color  thin outline around the button
+      text_color    label colour
+      radius        corner rounding in pixels
+      icon          name of an icon from icons.py
+      icon_layout   "top" (icon above the text), "left" (icon before the
+                    text) or "center" (icon only, no text)
+      selectable    False shows the button but lets gaze pass over it, for
+                    example the tab of the screen already on display
+      image         file name of a picture in assets/symbols (Quick-Fire
+                    tiles), drawn where an icon would go
     """
 
     progress = NumericProperty(0.0)  # 0.0 -> 1.0
 
     def __init__(self, on_selected=None, dwell_time=DWELL_TIME,
-                 repeatable=False, repeat_time=REPEAT_TIME, **kwargs):
+                 repeatable=False, repeat_time=REPEAT_TIME,
+                 bg_color=None, border_color=None, text_color=None,
+                 radius=10, icon=None, icon_color=None, icon_layout="top",
+                 selectable=True, image=None, **kwargs):
         super().__init__(**kwargs)
         self.on_selected = on_selected
         self.dwell_time = dwell_time
@@ -113,15 +170,111 @@ class DwellButton(Button):
         self._active_dwell_time = dwell_time
         self._event = None
 
-        with self.canvas.after:
-            Color(0.2, 0.8, 0.4, 0.55)
-            self._progress_rect = Rectangle(pos=self.pos, size=(0, self.height))
-        self.bind(pos=self._redraw, size=self._redraw)
+        self.selectable = selectable  # False: shown normally, but gaze ignores it
+        self.bg_color = bg_color
+        self.border_color = border_color
+        self.radius = radius
+        self.icon = icon
+        self.image_texture = _load_symbol(image) if image else None
+        self.icon_layout = icon_layout
+        self.icon_color = icon_color or text_color or WHITE
+        if text_color is not None:
+            self.color = text_color
+
+        if bg_color is not None:
+            # Hide Kivy's default button image; we draw our own shape.
+            self.background_normal = ""
+            self.background_down = ""
+            self.background_disabled_normal = ""
+            self.background_color = (0, 0, 0, 0)
+
+        # Three drawing layers: our background (under the text), the icon
+        # (over the text's layer), and the dwell progress (on top of all).
+        self._bg_group = InstructionGroup()
+        self.canvas.before.add(self._bg_group)
+        self._icon_group = InstructionGroup()
+        self.canvas.add(self._icon_group)
+        self._progress_group = InstructionGroup()
+        self.canvas.after.add(self._progress_group)
+
+        self.bind(pos=self._redraw, size=self._redraw, disabled=self._redraw)
+        self._redraw()
+
+    # -- drawing ---------------------------------------------------------
+    def set_bg_color(self, color):
+        """Changes the fill colour, e.g. to highlight an active Shift key."""
+        self.bg_color = color
+        self._redraw()
+
+    def _draw_image(self, box):
+        """Draws the picture as large as fits inside `box`, keeping its
+        proportions and centring it."""
+        bx, by, bw, bh = box
+        tw, th = self.image_texture.size
+        scale = min(bw / tw, bh / th)
+        dw, dh = tw * scale, th * scale
+        self._icon_group.add(Color(1, 1, 1, 1))  # white = draw the picture's own colours
+        self._icon_group.add(Rectangle(texture=self.image_texture,
+                                       pos=(bx + (bw - dw) / 2, by + (bh - dh) / 2),
+                                       size=(dw, dh)))
+
+    def _progress_color(self):
+        """White-ish fill on dark buttons, dark fill on light ones, so the
+        dwell progress is visible on every colour in the design."""
+        if self.bg_color is None:
+            return (0.2, 0.8, 0.4, 0.55)
+        r, g, b = self.bg_color[:3]
+        brightness = 0.299 * r + 0.587 * g + 0.114 * b
+        return (0, 0, 0, 0.28) if brightness > 0.6 else (1, 1, 1, 0.32)
 
     def _redraw(self, *args):
-        self._progress_rect.pos = self.pos
-        self._progress_rect.size = (self.width * self.progress, self.height)
+        x, y = self.pos
+        w, h = self.size
+        r = min(self.radius, w / 2, h / 2)
+        self.opacity = 0.35 if self.disabled else 1.0
 
+        self._bg_group.clear()
+        if self.bg_color is not None:
+            self._bg_group.add(Color(*self.bg_color))
+            self._bg_group.add(RoundedRectangle(pos=self.pos, size=self.size, radius=[r]))
+        if self.border_color is not None:
+            self._bg_group.add(Color(*self.border_color))
+            self._bg_group.add(Line(rounded_rectangle=(x, y, w, h, r), width=1.1))
+
+        self._icon_group.clear()
+        if self.icon or self.image_texture is not None:
+            bg = self.bg_color or (0, 0, 0, 1)
+            if self.icon_layout == "top":
+                # Picture in the upper part; text pinned to the bottom (it
+                # wraps onto a second line if it is too long for one).
+                self.text_size = (w, h)
+                self.halign, self.valign = "center", "bottom"
+                self.padding = [6, 4, 6, h * 0.08]
+                box = (x, y + h * 0.34, w, h * 0.58)
+            elif self.icon_layout == "left":
+                # Picture on the left; text in the remaining space.
+                icon_w = h * 0.5
+                self.text_size = (w, h)
+                self.halign, self.valign = "center", "middle"
+                self.padding = [icon_w + 8, 0, 4, 0]
+                box = (x + 8, y + h * 0.25, icon_w, h * 0.5)
+            else:  # "center": picture only
+                box = (x + w * 0.2, y + h * 0.2, w * 0.6, h * 0.6)
+
+            if self.image_texture is not None:
+                self._draw_image(box)
+            else:
+                draw_icon(self._icon_group, self.icon, *box, self.icon_color, bg)
+
+        self._progress_group.clear()
+        if self.progress > 0:
+            self._progress_group.add(Color(*self._progress_color()))
+            pw = w * self.progress
+            self._progress_group.add(
+                RoundedRectangle(pos=self.pos, size=(pw, h), radius=[min(r, pw / 2)])
+            )
+
+    # -- dwell timing (unchanged logic) -----------------------------------
     def start_dwell(self, dwell_time=None):
         if self._event is not None:
             return  # already dwelling on this button
@@ -144,13 +297,37 @@ class DwellButton(Button):
             if self.on_selected:
                 self.on_selected(self)
             if self.repeatable:
-                # Re-arm immediately at the faster repeat_time. GazeManager
-                # never touched this button (its target hasn't changed), so
-                # this keeps firing on its own until the pointer/gaze
-                # actually leaves -- at which point GazeManager calls
-                # cancel_dwell() on it and this loop stops.
+                # Re-arm straight away with repeat_time. GazeManager has not
+                # touched this button (its target hasn't changed), so it keeps
+                # firing until the pointer leaves, at which point GazeManager
+                # calls cancel_dwell() and the repeating stops.
                 self.start_dwell(dwell_time=self.repeat_time)
             return False  # stop this particular Clock event
+
+
+class Panel(BoxLayout):
+    """A BoxLayout with a rounded, filled background and an optional outline.
+    Used for the device frame, the keyboard panel and the word panel."""
+
+    def __init__(self, bg_color=PANEL_BG, border_color=None, radius=10, **kwargs):
+        super().__init__(**kwargs)
+        self._bg_color = bg_color
+        self._border_color = border_color
+        self._radius = radius
+        self._group = InstructionGroup()
+        self.canvas.before.add(self._group)
+        self.bind(pos=self._redraw, size=self._redraw)
+
+    def _redraw(self, *args):
+        x, y = self.pos
+        w, h = self.size
+        r = min(self._radius, w / 2, h / 2)
+        self._group.clear()
+        self._group.add(Color(*self._bg_color))
+        self._group.add(RoundedRectangle(pos=self.pos, size=self.size, radius=[r]))
+        if self._border_color is not None:
+            self._group.add(Color(*self._border_color))
+            self._group.add(Line(rounded_rectangle=(x, y, w, h, r), width=1.1))
 
 
 def _find_dwell_buttons(widget):
@@ -200,6 +377,8 @@ class GazeManager:
         pos = self.get_pointer_pos()
         target = None
         for btn in _find_dwell_buttons(active_screen):
+            if btn.disabled or not btn.selectable:
+                continue  # greyed-out or display-only buttons can't be selected
             local = btn.to_widget(*pos)
             if btn.collide_point(*local):
                 target = btn
@@ -213,189 +392,501 @@ class GazeManager:
 
 
 # ---------------------------------------------------------------------------
+# 3b. NAVIGATION -- Home and Back buttons
+# ---------------------------------------------------------------------------
+class Navigator:
+    """Switches screens and remembers the route taken, so Back can return.
+
+    Calibration is never recorded: the app leaves it once, at start-up,
+    and Back should not send the user through calibration again.
+    """
+
+    def __init__(self, screen_manager, home="keyboard", max_history=20):
+        self.sm = screen_manager
+        self.home = home
+        self.max_history = max_history
+        self.history = []
+
+    def go(self, name):
+        if name == self.sm.current:
+            return
+        self.history.append(self.sm.current)
+        self.history = self.history[-self.max_history:]  # keep the list short
+        self.sm.current = name
+
+    def back(self):
+        if self.history:
+            self.sm.current = self.history.pop()
+
+    def go_home(self):
+        self.go(self.home)
+
+    def can_go_back(self):
+        return bool(self.history)
+
+
+# ---------------------------------------------------------------------------
 # 4. KEYBOARD INTERFACE (Figure 29)
 # ---------------------------------------------------------------------------
-SHORTHAND_WORDS = ["Yes", "No", "Please", "Thank you", "Help", "Water", "Bathroom", "Hurts"]
+# Word sets shown in the design. Preliminary: to be confirmed by the
+# caregiver and therapist interviews (Data Gathering Procedure).
+QUICK_ACCESS_WORDS = ["Yes", "No", "Please", "Thank you"]
+COMMON_WORDS = ["my", "want", "like", "go", "you", "it", "more", "stop"]
+PHRASES = ["I need help", "I'm hungry", "I'm tired", "I love you"]
 
-KEY_ROWS = [
-    list("1234567890"),
-    list("QWERTYUIOP"),
-    list("ASDFGHJKL"),
-    list("ZXCVBNM"),
-]
+# The 26 character keys. The 123 key swaps letters for numbers and
+# punctuation on the SAME buttons, so both layouts must have 10, 9 and 7
+# keys per row.
+LETTER_ROWS = ["QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"]
+SYMBOL_ROWS = ["1234567890", "-/:;()&@\"", ".,?!'#%"]
+
+SENTENCE_END = (".", "?", "!")
+ATTACHING_PUNCTUATION = ".,?!"  # punctuation that belongs right after a word
+
+# Shared look of the dark keyboard keys.
+KEY_STYLE = dict(bg_color=KEY_FACE, border_color=KEY_BORDER, text_color=WHITE, radius=8)
 
 
-class KeyboardScreen(Screen):
-    def __init__(self, **kwargs):
+class AppScreen(Screen):
+    """The frame shared by the Keyboard and Quick-Fire screens (Figures 29-31):
+    a title bar with Home and Back, the KEYBOARD and QUICK FIRES tabs on
+    the left, the screen's own content on the right, and a footer.
+
+    Subclasses set TITLE and TAB, build their content, then call
+    build_frame(content). Keeping this in one place means both screens
+    always look and behave the same.
+    """
+
+    TITLE = ""
+    TAB = ""  # "keyboard" or "quickfire": which side tab is this screen's own
+
+    def __init__(self, navigator, **kwargs):
         super().__init__(**kwargs)
+        self.nav = navigator
+
+    def build_frame(self, content):
+        frame = Panel(bg_color=FRAME_BG, radius=0, orientation="vertical")
+        frame.add_widget(self._build_header())
+        body = BoxLayout(orientation="horizontal", padding=[10, 10, 10, 6], spacing=10)
+        body.add_widget(self._build_sidebar())
+        content.size_hint_x = 0.83
+        body.add_widget(content)
+        frame.add_widget(body)
+        frame.add_widget(self._build_footer())
+        self.add_widget(frame)
+
+    def _build_header(self):
+        header = Panel(bg_color=HEADER_BG, radius=0, size_hint_y=0.08,
+                       padding=[10, 6], spacing=8)
+        self.home_btn = DwellButton(icon="home", icon_layout="center", bg_color=FRAME_BG,
+                                    radius=22, size_hint_x=None, width=80,
+                                    on_selected=lambda b: self.nav.go_home())
+        self.back_btn = DwellButton(icon="arrow_left", icon_layout="center", bg_color=FRAME_BG,
+                                    radius=22, size_hint_x=None, width=80,
+                                    on_selected=lambda b: self.nav.back())
+        header.add_widget(self.home_btn)
+        header.add_widget(self.back_btn)
+        header.add_widget(Label(text=self.TITLE, bold=True, font_size=30, color=WHITE))
+        # An empty block as wide as the two buttons, so the title stays centred.
+        header.add_widget(Widget(size_hint_x=None, width=168))
+        return header
+
+    def _build_sidebar(self):
+        side = BoxLayout(orientation="vertical", size_hint_x=0.17, spacing=10)
+        on_keyboard = self.TAB == "keyboard"
+        # The tab of the screen on display gets a white border and is not
+        # selectable; the other tab switches screens.
+        side.add_widget(DwellButton(text="KEYBOARD", bold=True, font_size=20,
+                                    icon="keyboard", icon_layout="top",
+                                    bg_color=PURPLE, text_color=WHITE, radius=12,
+                                    border_color=WHITE if on_keyboard else None,
+                                    selectable=not on_keyboard, size_hint_y=0.27,
+                                    on_selected=lambda b: self.nav.go("keyboard")))
+        side.add_widget(DwellButton(text="QUICK FIRES", bold=True, font_size=20,
+                                    icon="flame", icon_layout="top",
+                                    bg_color=ORANGE, text_color=WHITE, radius=12,
+                                    border_color=None if on_keyboard else WHITE,
+                                    selectable=on_keyboard, size_hint_y=0.27,
+                                    on_selected=lambda b: self.nav.go("quickfire")))
+        side.add_widget(Widget(size_hint_y=0.46))  # empty space below the tabs
+        return side
+
+    def _build_footer(self):
+        footer = Panel(bg_color=HEADER_BG, radius=0, size_hint_y=0.04)
+        footer.add_widget(Label(text="EyeGlynt", font_size=14, color=WHITE))
+        return footer
+
+    def on_pre_enter(self, *args):
+        # Back is greyed out (and ignored by gaze) when there is nowhere to go back to.
+        self.back_btn.disabled = not self.nav.can_go_back()
+
+
+class KeyboardScreen(AppScreen):
+    """Figure 29: compose a message key by key or word by word, then Speak.
+
+    Layout, top to bottom: title bar with Home and Back; a body with the
+    mode tabs on the left and, on the right, the message box with Speak,
+    Clear and Backspace, the letter keys, and three word panels; then a
+    footer.
+    """
+
+    TITLE = "KEYBOARD"
+    TAB = "keyboard"
+
+    def __init__(self, navigator, **kwargs):
+        super().__init__(navigator, **kwargs)
         self.composed_text = ""
+        self.shift_on = True      # a message starts with a capital letter
+        self.symbols_on = False   # False: letters shown; True: numbers and punctuation
+        self.char_keys = []       # the 26 character buttons, in row order
 
-        root = BoxLayout(orientation="vertical", padding=10, spacing=10)
+        main = BoxLayout(orientation="vertical", spacing=8)
+        main.add_widget(self._build_compose_row())
+        main.add_widget(self._build_keys_panel())
+        main.add_widget(self._build_words_panel())
+        self.build_frame(main)
 
-        # -- composed text display --
-        self.text_label = Label(
-            text="", font_size=32, size_hint=(1, 0.15),
-            halign="left", valign="middle",
+        self._refresh_keys()
+        self._refresh_text()
+
+    # -- building the layout -------------------------------------------------
+    def _build_compose_row(self):
+        row = BoxLayout(orientation="horizontal", size_hint_y=0.22, spacing=8)
+
+        box = Panel(bg_color=WHITE, radius=12, padding=[14, 10], size_hint_x=0.74)
+        # The message sits in a ScrollView: when it grows taller than the box,
+        # the view scrolls to the end so the newest text is always visible.
+        self.text_scroll = ScrollView(do_scroll_x=False, bar_width=4)
+        self.text_label = Label(font_size=28, halign="left", valign="top", size_hint_y=None)
+        # Wrap at the box width; let the height grow with the text.
+        self.text_label.bind(width=lambda w, v: setattr(w, "text_size", (v, None)))
+        self.text_label.bind(texture_size=self._fit_text_height)
+        self.text_scroll.add_widget(self.text_label)
+        box.add_widget(self.text_scroll)
+        row.add_widget(box)
+
+        action = dict(bg_color=PURPLE, text_color=WHITE, radius=10, bold=True, font_size=16)
+        actions = GridLayout(cols=2, spacing=8, size_hint_x=0.26)
+        actions.add_widget(DwellButton(text="Speak", icon="speak", icon_layout="top",
+                                       on_selected=lambda b: self._speak_text(), **action))
+        actions.add_widget(DwellButton(text="Clear", icon="erase", icon_layout="top",
+                                       on_selected=lambda b: self._clear(), **action))
+        actions.add_widget(DwellButton(text="Backspace", icon="arrow_left", icon_layout="left",
+                                       repeatable=True,
+                                       on_selected=lambda b: self._backspace(),
+                                       **{**action, "font_size": 14}))
+        actions.add_widget(Widget())  # the design leaves this cell empty
+        row.add_widget(actions)
+        return row
+
+    def _make_char_key(self):
+        """One character key. Its character is stored on the button
+        (btn.key_value) and changes when 123 switches layouts."""
+        btn = DwellButton(font_size=28, repeatable=True,
+                          on_selected=self._on_char_key, **KEY_STYLE)
+        btn.key_value = ""
+        self.char_keys.append(btn)
+        return btn
+
+    def _build_keys_panel(self):
+        panel = Panel(bg_color=PANEL_BG, border_color=KEY_BORDER, orientation="vertical",
+                      size_hint_y=0.42, padding=8, spacing=6)
+
+        row1 = BoxLayout(spacing=6)
+        for _ in range(10):
+            row1.add_widget(self._make_char_key())
+
+        row2 = BoxLayout(spacing=6)
+        row2.add_widget(Widget(size_hint_x=0.5))  # half-key indent, as on a real keyboard
+        for _ in range(9):
+            row2.add_widget(self._make_char_key())
+        row2.add_widget(Widget(size_hint_x=0.5))
+
+        row3 = BoxLayout(spacing=6)
+        self.shift_btn = DwellButton(icon="shift", icon_layout="center", size_hint_x=1.5,
+                                     on_selected=lambda b: self._toggle_shift(), **KEY_STYLE)
+        row3.add_widget(self.shift_btn)
+        for _ in range(7):
+            row3.add_widget(self._make_char_key())
+        row3.add_widget(DwellButton(icon="erase", icon_layout="center", size_hint_x=1.5,
+                                    repeatable=True, on_selected=lambda b: self._backspace(),
+                                    **KEY_STYLE))
+
+        row4 = BoxLayout(spacing=6)
+        self.mode_btn = DwellButton(text="123", font_size=24, size_hint_x=1.5,
+                                    on_selected=lambda b: self._toggle_symbols(), **KEY_STYLE)
+        row4.add_widget(self.mode_btn)
+        row4.add_widget(DwellButton(text="Space", font_size=24, size_hint_x=7, repeatable=True,
+                                    on_selected=lambda b: self._insert_text(" "), **KEY_STYLE))
+        row4.add_widget(DwellButton(text="Enter", font_size=24, size_hint_x=1.5,
+                                    on_selected=lambda b: self._insert_text("\n"), **KEY_STYLE))
+
+        for row in (row1, row2, row3, row4):
+            panel.add_widget(row)
+        return panel
+
+    def _word_group(self, title, words, color, cols, width_share):
+        group = BoxLayout(orientation="vertical", spacing=4, size_hint_x=width_share)
+        group.add_widget(Label(text=title, bold=True, font_size=18, color=WHITE, size_hint_y=0.2))
+        grid = GridLayout(cols=cols, spacing=6)
+        for word in words:
+            btn = DwellButton(text=word, font_size=20, bg_color=color, text_color=DARK_TEXT,
+                              radius=8, on_selected=self._on_word)
+            btn.key_value = word
+            grid.add_widget(btn)
+        group.add_widget(grid)
+        return group
+
+    def _build_words_panel(self):
+        panel = Panel(bg_color=FRAME_BG, border_color=KEY_BORDER, orientation="horizontal",
+                      size_hint_y=0.36, padding=8, spacing=14)
+        panel.add_widget(self._word_group("Quick Access", QUICK_ACCESS_WORDS, PINK, 2, 0.24))
+        panel.add_widget(self._word_group("Common Words", COMMON_WORDS, GREEN, 4, 0.45))
+        panel.add_widget(self._word_group("Phrases", PHRASES, YELLOW, 2, 0.31))
+        return panel
+
+    # -- refreshing what is shown ---------------------------------------------
+    def _fit_text_height(self, *args):
+        """The label is exactly as tall as its text."""
+        self.text_label.height = self.text_label.texture_size[1]
+
+    def _scroll_to_end(self, dt):
+        """Kivy's scroll_y runs from 1 (top) to 0 (bottom). A long message is
+        scrolled to its end, so the newest words show; a message that fits
+        stays at the top of the box."""
+        overflowing = self.text_label.height > self.text_scroll.height
+        self.text_scroll.scroll_y = 0 if overflowing else 1
+
+    def _refresh_text(self):
+        if self.composed_text:
+            self.text_label.text = self.composed_text
+            self.text_label.color = DARK_TEXT
+        else:
+            self.text_label.text = "Type, here..."
+            self.text_label.color = PLACEHOLDER
+        # Scroll once Kivy has re-measured the text, on the next frame.
+        Clock.schedule_once(self._scroll_to_end, 0)
+
+    def _refresh_keys(self):
+        rows = SYMBOL_ROWS if self.symbols_on else LETTER_ROWS
+        for btn, ch in zip(self.char_keys, "".join(rows)):
+            btn.key_value = ch
+            btn.text = ch
+        self.mode_btn.text = "ABC" if self.symbols_on else "123"
+        self.shift_btn.disabled = self.symbols_on  # Shift has no meaning for symbols
+        highlight = self.shift_on and not self.symbols_on
+        self.shift_btn.set_bg_color(PURPLE if highlight else KEY_FACE)
+
+    def _after_edit(self):
+        """Runs after every change to the message."""
+        self._update_auto_shift()
+        self._refresh_text()
+        self._refresh_keys()
+
+    def _update_auto_shift(self):
+        """Capitalises the next letter at the start of the message, of a new
+        line, or after a sentence ends (". ", "? ", "! "). This saves the
+        user a Shift selection for every sentence."""
+        text = self.composed_text
+        trimmed = text.rstrip(" ")
+        self.shift_on = (
+            trimmed == ""
+            or trimmed.endswith("\n")
+            or (text.endswith(" ") and trimmed.endswith(SENTENCE_END))
         )
-        self.text_label.bind(size=lambda w, s: setattr(w, "text_size", s))
-        root.add_widget(self.text_label)
 
-        # -- shorthand / pre-loaded words row --
-        shorthand_row = BoxLayout(size_hint=(1, 0.12), spacing=6)
-        for word in SHORTHAND_WORDS:
-            shorthand_row.add_widget(
-                DwellButton(text=word, on_selected=self._make_word_handler(word))
-            )
-        root.add_widget(shorthand_row)
+    # -- actions --------------------------------------------------------------
+    def _on_char_key(self, btn):
+        ch = btn.key_value
+        if ch.isalpha():
+            ch = ch.upper() if self.shift_on else ch.lower()
+        if ch in ATTACHING_PUNCTUATION and self.composed_text.endswith(" "):
+            # A word button leaves a trailing space. Pull the punctuation back
+            # onto that word ("more ." becomes "more. ") and keep a space after
+            # it, so the user doesn't spend a Backspace and a Space on it.
+            self.composed_text = self.composed_text[:-1] + ch + " "
+            self._after_edit()
+            return
+        self._insert_text(ch)
 
-        # -- alphanumeric keyboard grid (letters/numbers are repeatable, so
-        #    holding your gaze on one key types it more than once -- e.g.
-        #    "food") --
-        keyboard_grid = BoxLayout(orientation="vertical", size_hint=(1, 0.55), spacing=6)
-        for row in KEY_ROWS:
-            row_layout = BoxLayout(spacing=6)
-            for ch in row:
-                row_layout.add_widget(
-                    DwellButton(text=ch, on_selected=self._make_char_handler(ch), repeatable=True)
-                )
-            keyboard_grid.add_widget(row_layout)
-        root.add_widget(keyboard_grid)
+    def _on_word(self, btn):
+        """Inserts a whole word or phrase, adding spaces around it as needed."""
+        word = btn.key_value
+        if self.shift_on:
+            word = word[:1].upper() + word[1:]
+        if self.composed_text and not self.composed_text.endswith((" ", "\n")):
+            self.composed_text += " "
+        self.composed_text += word + " "
+        self._after_edit()
 
-        # -- controls: space / backspace / clear / speak / switch mode --
-        # SPACE and BACKSPACE are repeatable (multiple spaces, or holding
-        # gaze to delete several characters). CLEAR, SPEAK, and switching
-        # screens are deliberately NOT repeatable -- you don't want "Speak"
-        # firing the whole message twice, or accidentally bouncing between
-        # screens, just because you looked a moment too long.
-        controls = BoxLayout(size_hint=(1, 0.18), spacing=6)
-        controls.add_widget(DwellButton(text="SPACE", on_selected=self._make_char_handler(" "), repeatable=True))
-        controls.add_widget(DwellButton(text="BACKSPACE", on_selected=lambda b: self._backspace(), repeatable=True))
-        controls.add_widget(DwellButton(text="CLEAR", on_selected=lambda b: self._clear()))
-        controls.add_widget(DwellButton(text="SPEAK", on_selected=lambda b: self._speak_text()))
-        controls.add_widget(DwellButton(text="Quick-Fire ->", on_selected=lambda b: self._go_to_quickfire()))
-        root.add_widget(controls)
-
-        self.add_widget(root)
-
-    def _make_char_handler(self, ch):
-        def handler(btn):
-            self.composed_text += ch
-            self.text_label.text = self.composed_text
-        return handler
-
-    def _make_word_handler(self, word):
-        def handler(btn):
-            self.composed_text += word + " "
-            self.text_label.text = self.composed_text
-        return handler
+    def _insert_text(self, text):
+        self.composed_text += text
+        self._after_edit()
 
     def _backspace(self):
         self.composed_text = self.composed_text[:-1]
-        self.text_label.text = self.composed_text
+        self._after_edit()
 
     def _clear(self):
         self.composed_text = ""
-        self.text_label.text = self.composed_text
+        self._after_edit()
+
+    def _toggle_shift(self):
+        self.shift_on = not self.shift_on
+        self._refresh_keys()
+
+    def _toggle_symbols(self):
+        self.symbols_on = not self.symbols_on
+        self._refresh_keys()
 
     def _speak_text(self):
         if self.composed_text.strip():
             speak(self.composed_text)
 
-    def _go_to_quickfire(self):
-        self.manager.current = "quickfire"
-
 
 # ---------------------------------------------------------------------------
-# 5. QUICK-FIRE INTERFACE (Figures 30-31)
+# 5. QUICK-FIRE INTERFACE (Figures 30-31, with the manuscript's six tabs)
 # ---------------------------------------------------------------------------
-# Preliminary phrase set -- swap these once caregiver/therapist interviews
-# (Data Gathering Procedure) confirm the final list.
+# Each category: its tile colour, then (phrase spoken, picture file) pairs.
+# The phrases are PRELIMINARY: they are to be replaced with the set
+# confirmed by the caregiver and therapist interviews (Data Gathering
+# Procedure). Pictures are in assets/symbols; see CREDITS.md there.
 QUICKFIRE_CATEGORIES = {
-    "Emergency": ["Call the nurse", "I need help now", "Emergency!", "Call my family"],
-    "Pain": ["I am in pain", "My head hurts", "My stomach hurts", "It hurts here"],
-    "Basic Needs": ["I am hungry", "I am thirsty", "I need the bathroom", "I am tired"],
-    "Social/Emotional": ["I am happy", "I am sad", "I am scared", "I am bored"],
-    "People/Family": ["I want to see my family", "Call my caregiver", "Who is here?"],
-    "Environment": ["Too hot", "Too cold", "Turn off the light", "Turn on the TV"],
+    "Emergency": (TILE_RED, [
+        ("Help me, please!", "help"),
+        ("Call the nurse", "nurse"),
+        ("Call the doctor", "doctor"),
+        ("I can't breathe", "oxygen_mask"),
+        ("Call an ambulance", "ambulance"),
+        ("Call my family", "mobile_phone"),
+        ("I feel sick", "vomit"),
+        ("Please listen to me", "hear"),
+    ]),
+    "Pain": (TILE_ORANGE, [
+        ("I am in pain", "back_ache"),
+        ("My head hurts", "headache"),
+        ("My stomach hurts", "stomach_ache"),
+        ("My chest hurts", "chest"),
+        ("My throat hurts", "throat"),
+        ("It hurts here", "point"),
+        ("I need my medicine", "tablets"),
+        ("Please move me", "move"),
+    ]),
+    "Basic Needs": (YELLOW, [
+        ("I'm hungry", "hungry"),
+        ("I'm thirsty", "thirsty"),
+        ("I need to use the comfort room", "need_toilet"),
+        ("I want to sleep", "sleep"),
+        ("I want to sit up", "sit"),
+        ("I want to lie down", "lie_down"),
+        ("I need a bath", "bath"),
+        ("I need my glasses", "glasses"),
+    ]),
+    "Social/Emotional": (GREEN, [
+        ("I am happy", "happy"),
+        ("I am sad", "sad"),
+        ("I am tired", "tired"),
+        ("I am okay", "okay"),
+        ("I am scared", "scared"),
+        ("I am worried", "worried"),
+        ("I am confused", "confused"),
+        ("I love you", "love"),
+    ]),
+    "People/Family": (TILE_BLUE, [
+        ("I want to see my family", "family"),
+        ("Who is here?", "who"),
+        ("Talk to me", "talk"),
+        ("I want visitors", "visitor"),
+        ("Hello", "hello"),
+        ("Please pray with me", "pray"),
+        ("Where is my family?", "where"),
+        ("I want a hug", "hug"),
+    ]),
+    "Environment": (PINK, [
+        ("It's too hot", "hot"),
+        ("It's too cold", "cold"),
+        ("Turn on the light", "light_on"),
+        ("Turn off the light", "light_off"),
+        ("Turn on the TV", "tv_on"),
+        ("Open the window", "window"),
+        ("It's too noisy", "noisy"),
+        ("I want to go outside", "outside"),
+    ]),
 }
+QUICKFIRE_COLUMNS = 4  # 8 phrases per category -> a 4 x 2 grid of large tiles
 
 
-class QuickFireScreen(Screen):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.category_names = list(QUICKFIRE_CATEGORIES.keys())
-        self.category_widgets = {}  # category name -> its ScrollView, built once
-        self.tab_buttons = {}       # category name -> its DwellButton
+class QuickFireScreen(AppScreen):
+    """Figures 30-31, organised into the manuscript's six category tabs.
+
+    Selecting a category tab (by dwell, like everything else) shows that
+    category's phrase tiles. Selecting a tile speaks its phrase at once,
+    with no confirmation step, as the manuscript specifies for urgent
+    messages.
+    """
+
+    TITLE = "QUICK FIRES"
+    TAB = "quickfire"
+
+    def __init__(self, navigator, **kwargs):
+        super().__init__(navigator, **kwargs)
+        self.category_names = list(QUICKFIRE_CATEGORIES)
+        self.category_grids = {}  # category -> its tile grid, built the first time it is opened
+        self.tab_buttons = {}     # category -> its tab button
         self.current_category = None
 
-        root = BoxLayout(orientation="vertical", padding=10, spacing=10)
+        content = BoxLayout(orientation="vertical", spacing=8)
+        content.add_widget(self._build_tab_row())
+        self.tiles_panel = Panel(bg_color=PANEL_BG, border_color=KEY_BORDER,
+                                 size_hint_y=0.88, padding=10)
+        content.add_widget(self.tiles_panel)
+        self.build_frame(content)
 
-        # -- category tab row: plain DwellButtons, exactly like every other
-        #    button in the app, so switching categories also requires a
-        #    dwell instead of an instant click --
-        self.tab_row = BoxLayout(size_hint=(1, 0.12), spacing=6)
-        for category in self.category_names:
-            btn = DwellButton(text=category, on_selected=self._make_tab_handler(category))
-            self.tab_buttons[category] = btn
-            self.tab_row.add_widget(btn)
-        root.add_widget(self.tab_row)
-
-        # -- content area: we swap what's inside this depending on which
-        #    category tab was last dwell-selected --
-        self.content_area = BoxLayout(size_hint=(1, 0.73))
-        root.add_widget(self.content_area)
-
-        root.add_widget(
-            DwellButton(
-                text="<- Keyboard", size_hint=(1, 0.15),
-                on_selected=lambda b: self._go_to_keyboard(),
-            )
-        )
-        self.add_widget(root)
-
-        # show the first category by default
         self._switch_category(self.category_names[0])
 
-    def _build_category_view(self, category):
-        """Builds the scrollable phrase grid for one category (only once,
-        the first time that category is opened)."""
-        grid = GridLayout(cols=2, spacing=8, padding=8, size_hint_y=None)
-        grid.bind(minimum_height=grid.setter("height"))
-        for phrase in QUICKFIRE_CATEGORIES[category]:
-            grid.add_widget(
-                DwellButton(
-                    text=phrase, size_hint_y=None, height=110,
-                    on_selected=self._make_phrase_handler(phrase),
-                )
-            )
-        scroll = ScrollView(size_hint=(1, 1))
-        scroll.add_widget(grid)
-        return scroll
+    def _build_tab_row(self):
+        row = BoxLayout(orientation="horizontal", size_hint_y=0.12, spacing=8)
+        for name in self.category_names:
+            btn = DwellButton(text=name, bold=True, font_size=17,
+                              on_selected=self._on_tab, **{**KEY_STYLE, "radius": 10})
+            btn.key_value = name
+            self.tab_buttons[name] = btn
+            row.add_widget(btn)
+        return row
 
-    def _make_tab_handler(self, category):
-        def handler(btn):
-            self._switch_category(category)
-        return handler
+    def _build_tile_grid(self, name):
+        color, phrases = QUICKFIRE_CATEGORIES[name]
+        grid = GridLayout(cols=QUICKFIRE_COLUMNS, spacing=10)
+        for phrase, picture in phrases:
+            tile = DwellButton(text=phrase, font_size=20, bg_color=color, text_color=DARK_TEXT,
+                               radius=12, image=picture, icon_layout="top",
+                               on_selected=self._on_tile)
+            tile.key_value = phrase
+            grid.add_widget(tile)
+        return grid
 
-    def _switch_category(self, category):
-        if category not in self.category_widgets:
-            self.category_widgets[category] = self._build_category_view(category)
+    def _on_tab(self, btn):
+        self._switch_category(btn.key_value)
 
-        self.content_area.clear_widgets()
-        self.content_area.add_widget(self.category_widgets[category])
-        self.current_category = category
+    def _on_tile(self, btn):
+        speak(btn.key_value)
 
-        # highlight the active tab so it's obvious which category you're in
-        for name, btn in self.tab_buttons.items():
-            btn.background_color = (0.35, 0.55, 0.85, 1) if name == category else (1, 1, 1, 1)
+    def _switch_category(self, name):
+        if name not in self.category_grids:
+            self.category_grids[name] = self._build_tile_grid(name)
+        self.tiles_panel.clear_widgets()
+        self.tiles_panel.add_widget(self.category_grids[name])
+        self.current_category = name
 
-    def _make_phrase_handler(self, phrase):
-        def handler(btn):
-            speak(phrase)
-        return handler
-
-    def _go_to_keyboard(self):
-        self.manager.current = "keyboard"
+        # The active tab takes its category's colour with a white border and,
+        # like the side tabs, is not selectable; the others stay dark.
+        for tab_name, tab in self.tab_buttons.items():
+            active = tab_name == name
+            tab.set_bg_color(QUICKFIRE_CATEGORIES[tab_name][0] if active else KEY_FACE)
+            tab.border_color = WHITE if active else KEY_BORDER
+            tab.color = DARK_TEXT if active else WHITE
+            tab.selectable = not active
+            tab._redraw()
 
 
 # ---------------------------------------------------------------------------
@@ -474,12 +965,21 @@ class CalibrationScreen(Screen):
             self._preview_event.cancel()
             self._preview_event = None
 
+    def _done(self):
+        """Leaves calibration, but only if it is still the screen on display.
+        Calibration's timers keep running after the screen is left, and
+        must never pull the user away from another screen later."""
+        if self.manager is not None and self.manager.current == self.name:
+            self.on_done()
+
     def _check_camera_and_start(self, dt):
+        if self.manager is None or self.manager.current != self.name:
+            return  # calibration was left before the camera check ran
         if not self.gaze_engine.is_camera_ok():
             # No camera available -- skip calibration entirely rather than
             # get the user stuck staring at dots that can't be measured.
             self.instruction_label.text = "No camera detected -- using mouse control instead."
-            Clock.schedule_once(lambda dt: self.on_done(), 1.5)
+            Clock.schedule_once(lambda dt: self._done(), 1.5)
             return
         self._show_current_target()
 
@@ -533,7 +1033,7 @@ class CalibrationScreen(Screen):
             # fall back to mouse rather than leaving gaze half-broken.
             print(f"[Calibration] {e} -- falling back to mouse control.")
             self.instruction_label.text = "Calibration incomplete -- using mouse control instead."
-        Clock.schedule_once(lambda dt: self.on_done(), 1.0)
+        Clock.schedule_once(lambda dt: self._done(), 1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -541,13 +1041,14 @@ class CalibrationScreen(Screen):
 # ---------------------------------------------------------------------------
 class EyeGlyntApp(App):
     def build(self):
-        self.title = "EyeGlynt - Prototype UI"
+        self.title = "EyeGlynt"
         self.gaze_engine = GazeEngine()
         self.gaze_engine.start()
 
         sm = ScreenManager()
-        sm.add_widget(KeyboardScreen(name="keyboard"))
-        sm.add_widget(QuickFireScreen(name="quickfire"))
+        self.navigator = Navigator(sm, home="keyboard")
+        sm.add_widget(KeyboardScreen(self.navigator, name="keyboard"))
+        sm.add_widget(QuickFireScreen(self.navigator, name="quickfire"))
         sm.add_widget(
             CalibrationScreen(
                 gaze_engine=self.gaze_engine,
