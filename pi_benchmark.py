@@ -2,7 +2,7 @@
 EyeGlynt - Raspberry Pi Performance Benchmark
 ==============================================
 Measures how fast MediaPipe face-landmark detection actually runs on
-this Pi, using the Arducam OV9281 via picamera2.
+this Pi, using the Camera Module 3 NoIR via picamera2.
 
 This answers the key unknown before adapting the full gaze engine: if
 this runs at 15+ fps, the existing design works as-is. If it's much
@@ -29,6 +29,7 @@ import mediapipe as mp
 from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision as mp_vision
 from picamera2 import Picamera2
+from libcamera import controls  # names for camera settings (autofocus mode)
 
 MODEL_PATH = "face_landmarker.task"
 MODEL_URL = (
@@ -36,19 +37,15 @@ MODEL_URL = (
     "face_landmarker/float16/1/face_landmarker.task"
 )
 
-# Camera exposure settings. The OV9281 needs these set manually --
-# libcamera's auto-exposure doesn't work well on this sensor without a
-# proper tuning file, so images come out nearly black by default.
-# These are the values found to work during hardware bring-up; expect
-# to lower the gain once the IR LEDs are added, since high gain adds
-# noise that hurts tracking.
-SHUTTER_US = 20000  # microseconds (20ms)
-ANALOGUE_GAIN = 8.0
+# The Camera Module 3 NoIR has automatic exposure that works out of the
+# box, so no shutter or gain values are set here. Focus is fixed at the
+# user's distance; lens position is in dioptres = 1 / distance in metres.
+FOCUS_DISTANCE_M = 0.5
 
-# Capture resolution. The sensor supports 640x400, 1280x720 and
-# 1280x800. Starting at 640x400: fewer pixels means faster MediaPipe
-# inference, and for eye tracking at close range it should be plenty.
-CAPTURE_WIDTH, CAPTURE_HEIGHT = 640, 400
+# Capture resolution: 16:9, the sensor's own shape, so the full field
+# of view is kept. Fewer pixels means faster MediaPipe inference, and
+# for eye tracking at close range it is plenty. Must match gaze_engine.py.
+CAPTURE_WIDTH, CAPTURE_HEIGHT = 640, 360
 
 BENCHMARK_FRAMES = 100
 
@@ -81,18 +78,18 @@ def main():
 
     print("Setting up camera ...")
     picam2 = Picamera2()
-    # The OV9281 is monochrome, but MediaPipe expects 3-channel RGB, so
-    # capture as RGB888 and let picamera2 handle the conversion.
+    # picamera2's "BGR888" gives pixels in [R, G, B] order, which is
+    # what MediaPipe expects (same as in gaze_engine.py).
     config = picam2.create_preview_configuration(
-        main={"size": (CAPTURE_WIDTH, CAPTURE_HEIGHT), "format": "RGB888"}
+        main={"size": (CAPTURE_WIDTH, CAPTURE_HEIGHT), "format": "BGR888"}
     )
     picam2.configure(config)
-    picam2.set_controls({
-        "ExposureTime": SHUTTER_US,
-        "AnalogueGain": ANALOGUE_GAIN,
-    })
     picam2.start()
-    time.sleep(2)  # let exposure settle
+    picam2.set_controls({
+        "AfMode": controls.AfModeEnum.Manual,           # no autofocus hunting
+        "LensPosition": 1.0 / FOCUS_DISTANCE_M,         # focus at the user's distance
+    })
+    time.sleep(2)  # let exposure and focus settle
 
     print(f"\nRunning {BENCHMARK_FRAMES} frames -- look at the camera!\n")
 
@@ -153,9 +150,9 @@ def main():
         print("capture size, or processing every 2nd frame, before building on this.")
 
     if frames_with_face == 0:
-        print("\nNOTE: no face was detected in ANY frame. If you were in view of")
-        print("the camera, the image is probably too dark -- try raising")
-        print("SHUTTER_US or ANALOGUE_GAIN at the top of this file.")
+        print("\nNOTE: no face was detected in ANY frame. Check that you were in")
+        print("view of the camera, about FOCUS_DISTANCE_M away, and that the")
+        print("picture isn't blurry (run rpicam-hello to look at it).")
 
 
 if __name__ == "__main__":

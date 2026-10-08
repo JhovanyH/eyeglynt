@@ -43,6 +43,7 @@ except ImportError:
 
 try:
     from picamera2 import Picamera2
+    from libcamera import controls as libcamera_controls  # names for camera settings (autofocus mode)
 except ImportError:
     Picamera2 = None
 
@@ -53,18 +54,21 @@ MODEL_URL = (
 )
 
 # --- Raspberry Pi camera settings -----------------------------------
-# The Arducam OV9281 needs exposure set manually: libcamera's
-# auto-exposure doesn't work well on this mono sensor, so frames come
-# out nearly black at default settings. These values were found during
-# hardware bring-up and gave 100% face detection in benchmarking.
-# EXPECT TO LOWER THE GAIN once the IR LEDs are added -- they'll
-# provide illumination, and high gain adds noise that hurts tracking.
-PI_SHUTTER_US = 20000   # microseconds (20ms)
-PI_ANALOGUE_GAIN = 8.0
-# 640x400 measured ~14 fps end-to-end on a Pi 4 (MediaPipe inference is
-# the bottleneck at ~68ms/frame, capture is only ~2ms). Raising this
-# resolution will slow things down without helping tracking much.
-CAPTURE_WIDTH, CAPTURE_HEIGHT = 640, 400
+# Camera: Raspberry Pi Camera Module 3 NoIR (sensor imx708_noir).
+# Unlike the earlier Arducam OV9281, Raspberry Pi ships a tuning file
+# for this camera, so automatic exposure works and no manual shutter or
+# gain values are needed. Exposure adapts on its own when the room
+# lighting changes or the IR LEDs are on.
+#
+# Focus is fixed at the user's working distance instead of autofocus,
+# so the lens never "hunts" in the middle of tracking. The lens position
+# is in dioptres = 1 / distance in metres (0.5 m -> 2.0).
+PI_FOCUS_DISTANCE_M = 0.5
+# 640x360 keeps the sensor's 16:9 shape, so the full field of view is
+# used and faces aren't squashed. MediaPipe inference is the bottleneck
+# on the Pi 4 (~14 fps at 640x400 in earlier benchmarking), so a bigger
+# image would only slow things down without helping tracking much.
+CAPTURE_WIDTH, CAPTURE_HEIGHT = 640, 360
 
 # Landmark indices, confirmed directly from MediaPipe's own connection
 # graph -- see gaze_test.py for how these were verified.
@@ -159,7 +163,7 @@ class _OpenCVCamera:
 
 
 class _PiCamera:
-    """Raspberry Pi CSI camera (Arducam OV9281) via picamera2.
+    """Raspberry Pi CSI camera (Camera Module 3 NoIR) via picamera2.
 
     OpenCV's VideoCapture cannot read libcamera-based CSI cameras at
     all, which is why this separate backend exists rather than just
@@ -172,16 +176,23 @@ class _PiCamera:
         if Picamera2 is None:
             raise RuntimeError("picamera2 is not installed")
         self._picam = Picamera2()
+        # picamera2's format names are the reverse of the pixel order in
+        # memory: "BGR888" gives pixels as [R, G, B], which is the RGB
+        # order MediaPipe expects. (The old mono camera made every
+        # channel the same, so the order didn't matter; with a colour
+        # camera it does.)
         config = self._picam.create_preview_configuration(
-            main={"size": (CAPTURE_WIDTH, CAPTURE_HEIGHT), "format": "RGB888"}
+            main={"size": (CAPTURE_WIDTH, CAPTURE_HEIGHT), "format": "BGR888"}
         )
         self._picam.configure(config)
-        self._picam.set_controls({
-            "ExposureTime": PI_SHUTTER_US,
-            "AnalogueGain": PI_ANALOGUE_GAIN,
-        })
         self._picam.start()
-        time.sleep(2)  # let exposure settle before the first frames
+        # Fixed focus at the working distance (see PI_FOCUS_DISTANCE_M).
+        # Exposure is left on automatic, its default.
+        self._picam.set_controls({
+            "AfMode": libcamera_controls.AfModeEnum.Manual,
+            "LensPosition": 1.0 / PI_FOCUS_DISTANCE_M,
+        })
+        time.sleep(2)  # let exposure and focus settle before the first frames
 
     def read(self):
         frame = self._picam.capture_array()
