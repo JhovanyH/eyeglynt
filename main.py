@@ -7,11 +7,11 @@ screens of EyeGlynt, built with Kivy.
 Every selectable element is a DwellButton: it selects only after the
 pointer stays on it for DWELL_TIME seconds (the Midas Touch solution).
 GazeManager decides where the pointer is:
-  - after a successful calibration, the horizontal position comes from
-    the eyes (gaze_engine.py) and the vertical position from the mouse,
-    until PCCR tracking is built;
-  - with no camera or no calibration, the mouse controls both, so the
-    device is never left unusable.
+  - after a successful calibration, left/right comes from the iris
+    position and up/down from PCCR (the IR glints), see gaze_engine.py;
+  - whichever direction isn't calibrated, or can't be measured at the
+    moment (no face, no glint), uses the mouse instead, so the device
+    is never left unusable.
 
 RUN
 ---
@@ -347,13 +347,10 @@ class GazeManager:
     Polls a pointer position 30x/sec and starts/cancels dwell timers on
     whichever DwellButton is currently under it.
 
-    Pointer X comes from real gaze once `gaze_engine` is calibrated;
-    pointer Y still comes from the mouse -- see the CURRENT LIMITATION
-    note in gaze_engine.py for why (plain webcam iris tracking couldn't
-    reliably measure vertical eye movement; real PCCR will replace this
-    once the IR camera + LED hardware exists). Until calibration happens
-    (or if no camera is available at all), this falls back to full
-    mouse control, so the app is never left unusable.
+    Pointer X comes from gaze once `gaze_engine` is calibrated, and
+    pointer Y too if the up/down (PCCR) calibration succeeded. Each one
+    falls back to the mouse on its own whenever gaze can't give it (not
+    calibrated, no face, no glint), so the app is never left unusable.
     """
 
     def __init__(self, screen_manager: ScreenManager, gaze_engine: GazeEngine = None):
@@ -363,12 +360,15 @@ class GazeManager:
         Clock.schedule_interval(self._update, 1 / 30)
 
     def get_pointer_pos(self):
-        mouse_x, mouse_y = Window.mouse_pos
-        if self.gaze_engine is not None and self.gaze_engine.is_calibrated():
-            gaze_x = self.gaze_engine.get_screen_x()
+        x, y = Window.mouse_pos  # start from the mouse...
+        if self.gaze_engine is not None:
+            gaze_x = self.gaze_engine.get_screen_x()  # None if not available
+            gaze_y = self.gaze_engine.get_screen_y()
             if gaze_x is not None:
-                return (gaze_x, mouse_y)  # real gaze for X, mouse for Y (for now)
-        return (mouse_x, mouse_y)
+                x = gaze_x  # ...and replace each direction gaze can provide
+            if gaze_y is not None:
+                y = gaze_y
+        return (x, y)
 
     def _update(self, dt):
         active_screen = self.sm.current_screen
@@ -926,6 +926,7 @@ COUNTDOWN_SECONDS = 3           # 3, 2, 1 after Start is pressed
 
 GREEN_TEXT = rgb(120, 220, 120)  # "Face detected"
 RED_TEXT = rgb(255, 120, 120)    # "Face not detected"
+ORANGE_TEXT = rgb(255, 190, 90)  # "No IR glints"
 
 
 class CalibrationScreen(Screen):
@@ -995,7 +996,8 @@ class CalibrationScreen(Screen):
         self.instruction_label.text = (
             "Get ready for calibration\n"
             "Sit about 50 cm from the screen, with your whole face in the camera view.\n"
-            "When calibration starts, keep your head still and follow the red dot with your eyes."
+            "When calibration starts, keep your head still and follow the red dot with your eyes.\n"
+            "Preview: green = iris, white = IR glints, yellow = pupil."
         )
         self.face_label.text = "Starting camera..."
         self.face_label.color = WHITE
@@ -1028,12 +1030,17 @@ class CalibrationScreen(Screen):
         self.preview_image.texture = texture
         self.preview_image.opacity = 1
 
-        if self.gaze_engine.get_latest_feature() is not None:
-            self.face_label.text = "Face detected -- press Start when you are ready"
-            self.face_label.color = GREEN_TEXT
-        else:
+        feature = self.gaze_engine.get_latest_feature()
+        if feature is None:
             self.face_label.text = "Face not detected -- move into the camera view"
             self.face_label.color = RED_TEXT
+        elif feature[1] is None:
+            # Face found, but no IR glints: up/down would fall back to the mouse.
+            self.face_label.text = "Face detected, but no IR glints (white dots) -- check the IR LEDs"
+            self.face_label.color = ORANGE_TEXT
+        else:
+            self.face_label.text = "Face and IR glints detected -- press Start when you are ready"
+            self.face_label.color = GREEN_TEXT
 
         # The camera works, so the user may start now.
         if self.start_btn.parent is None:
@@ -1098,7 +1105,8 @@ class CalibrationScreen(Screen):
         x, y = self.width * fx, self.height * fy
         self.current_target_px = (x, y)
         self.dot.pos = (x - 20, y - 20)
-        self.samples = []
+        self.samples = []      # fx readings (left/right) at this dot
+        self.samples_vy = []   # vy readings (up/down), only when a glint is seen
         self._target_start_time = time.time()
         self._sample_event = Clock.schedule_interval(self._collect_sample, 1 / 30)
         Clock.schedule_once(self._finish_current_target, CALIBRATION_CAPTURE_TIME)
@@ -1108,7 +1116,10 @@ class CalibrationScreen(Screen):
         elapsed = time.time() - self._target_start_time
         # Ignore the first moment at each dot: the eyes are still moving there.
         if feature is not None and elapsed >= CALIBRATION_SETTLE_TIME:
-            self.samples.append(feature[0])  # only fx (horizontal) is used for now
+            fx, vy = feature
+            self.samples.append(fx)
+            if vy is not None:
+                self.samples_vy.append(vy)
 
         remaining = max(0.0, CALIBRATION_CAPTURE_TIME - elapsed)
         point_num = self.target_index + 1
@@ -1126,8 +1137,13 @@ class CalibrationScreen(Screen):
 
         if self.samples:
             avg_fx = sum(self.samples) / len(self.samples)
-            target_x, _ = self.current_target_px
-            self.gaze_engine.add_calibration_point(avg_fx, target_x)
+            target_x, target_y = self.current_target_px
+            # Up/down is only recorded if a glint was seen for at least
+            # half of the readings at this dot; otherwise it's unreliable.
+            avg_vy = None
+            if len(self.samples_vy) >= len(self.samples) / 2:
+                avg_vy = sum(self.samples_vy) / len(self.samples_vy)
+            self.gaze_engine.add_calibration_point(avg_fx, target_x, avg_vy, target_y)
 
         self.target_index += 1
         if self.target_index < len(CALIBRATION_POINTS):
@@ -1139,14 +1155,14 @@ class CalibrationScreen(Screen):
         self.dot.pos = (-100, -100)
         self._place_label("center", 36, 0.3)
         try:
-            self.gaze_engine.fit_calibration()
-            self.instruction_label.text = "Calibration complete!"
+            summary = self.gaze_engine.fit_calibration()
+            self.instruction_label.text = f"Calibration complete!\n{summary}"
         except ValueError as e:
             # Not enough usable samples (e.g. face wasn't visible) --
             # fall back to mouse rather than leaving gaze half-broken.
             print(f"[Calibration] {e} -- falling back to mouse control.")
             self.instruction_label.text = "Calibration incomplete -- using mouse control instead."
-        self._leave_after(1.0)
+        self._leave_after(3.0)  # long enough to read the result
 
     # ---- leaving -----------------------------------------------------------
     def _leave_after(self, seconds):

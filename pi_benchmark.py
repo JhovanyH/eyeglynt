@@ -42,10 +42,10 @@ MODEL_URL = (
 # user's distance; lens position is in dioptres = 1 / distance in metres.
 FOCUS_DISTANCE_M = 0.5
 
-# Capture resolution: 16:9, the sensor's own shape, so the full field
-# of view is kept. Fewer pixels means faster MediaPipe inference, and
-# for eye tracking at close range it is plenty. Must match gaze_engine.py.
-CAPTURE_WIDTH, CAPTURE_HEIGHT = 640, 360
+# Same as gaze_engine.py: capture at 1536x864 (detail for the IR
+# glints), and give MediaPipe every 2nd pixel (768x432) to keep it fast.
+CAPTURE_WIDTH, CAPTURE_HEIGHT = 1536, 864
+MEDIAPIPE_STEP = 2
 
 BENCHMARK_FRAMES = 100
 
@@ -103,7 +103,8 @@ def main():
         frame = picam2.capture_array()
         t1 = time.time()
 
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
+        small = np.ascontiguousarray(frame[::MEDIAPIPE_STEP, ::MEDIAPIPE_STEP])
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=small)
         timestamp_ms = int((time.time() - start_time) * 1000)
         result = landmarker.detect_for_video(mp_image, timestamp_ms)
         t2 = time.time()
@@ -132,7 +133,8 @@ def main():
     print("\n" + "=" * 55)
     print("RESULTS")
     print("=" * 55)
-    print(f"Resolution:            {CAPTURE_WIDTH}x{CAPTURE_HEIGHT}")
+    print(f"Resolution:            {CAPTURE_WIDTH}x{CAPTURE_HEIGHT} "
+          f"(MediaPipe: {CAPTURE_WIDTH // MEDIAPIPE_STEP}x{CAPTURE_HEIGHT // MEDIAPIPE_STEP})")
     print(f"Frames processed:      {BENCHMARK_FRAMES}")
     print(f"Face detected in:      {frames_with_face}/{BENCHMARK_FRAMES} frames")
     print(f"Avg capture time:      {avg_capture:.1f} ms")
