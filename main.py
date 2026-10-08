@@ -890,14 +890,42 @@ class QuickFireScreen(AppScreen):
 
 
 # ---------------------------------------------------------------------------
-# 6. CALIBRATION SCREEN -- horizontal-only 3-point calibration
+# 6. CALIBRATION SCREEN -- get ready, then a 9-point calibration
 # ---------------------------------------------------------------------------
-# Only 3 points (left, center, right), not the full 5-point routine from
-# Figure 38 -- since vertical tracking isn't usable yet (see gaze_engine.py),
-# calibrating a vertical dimension that doesn't work would be misleading.
-# Swap this for the real 5-point PCCR calibration once the IR hardware and
-# true corneal-reflection tracking are in place.
-CALIBRATION_CAPTURE_TIME = 2.0  # seconds spent looking at each dot
+# The screen has three stages:
+#   1. READY:     a large camera preview and a Start Calibration button, so
+#                 the user can sit correctly and see their face is detected
+#                 before anything starts. The button only appears once the
+#                 camera is actually sending pictures, so a slow start-up
+#                 can never make calibration begin before the user is ready.
+#   2. COUNTDOWN: 3, 2, 1 after Start is pressed, so the user has time to
+#                 put their hands down and look at the screen.
+#   3. DOTS:      the red dot visits 9 points (a 3 x 3 grid) and the gaze
+#                 is measured at each one.
+#
+# Only the HORIZONTAL position is fitted for now (see gaze_engine.py), but
+# 9 points still help: each of the 3 columns is measured 3 times, at
+# different heights, so one bad reading has much less effect on the fit.
+# The same 9 points will be reused for up/down once PCCR is added.
+
+# Where the dots appear, as fractions of the screen: (x, y), with y = 0 at
+# the BOTTOM of the screen (Kivy's convention). The order starts at the
+# centre and then goes clockwise around the edge, so the eyes never have
+# to jump across the whole screen between two dots.
+CALIBRATION_POINTS = [
+    (0.50, 0.47),                               # centre
+    (0.08, 0.82), (0.50, 0.82), (0.92, 0.82),   # top row: left, middle, right
+    (0.92, 0.47),                               # middle right
+    (0.92, 0.12), (0.50, 0.12), (0.08, 0.12),   # bottom row: right, middle, left
+    (0.08, 0.47),                               # middle left
+]
+CALIBRATION_CAPTURE_TIME = 2.0  # seconds the dot stays at each point
+CALIBRATION_SETTLE_TIME = 0.5   # first part of those seconds is ignored: the
+                                # eyes are still moving onto the new dot
+COUNTDOWN_SECONDS = 3           # 3, 2, 1 after Start is pressed
+
+GREEN_TEXT = rgb(120, 220, 120)  # "Face detected"
+RED_TEXT = rgb(255, 120, 120)    # "Face not detected"
 
 
 class CalibrationScreen(Screen):
@@ -908,81 +936,161 @@ class CalibrationScreen(Screen):
         self.targets_px = []
         self.target_index = 0
         self.samples = []
+        self.stage = "ready"           # "ready", "countdown" or "dots"
+        self._countdown_left = 0
         self._sample_event = None
         self._preview_event = None
+        self._countdown_event = None
+        self._leaving = False          # True once we've decided to leave
 
-        # Instructions confined to the TOP strip of the screen only, so
-        # they never overlap the dot (which sits at vertical center).
+        # Instructions at the top of the screen. Its height changes per
+        # stage, so it never covers the preview or the dots.
         self.instruction_label = Label(
-            text="Calibration -- look at the red dot and keep still",
-            font_size=22, size_hint=(1, 0.25), pos_hint={"top": 1, "x": 0},
+            font_size=22, size_hint=(1, 0.2), pos_hint={"top": 1, "x": 0},
             halign="center", valign="top",
         )
         self.instruction_label.bind(size=lambda w, s: setattr(w, "text_size", s))
         self.add_widget(self.instruction_label)
 
-        # Live camera preview, with the same green iris dots you saw in
-        # gaze_test.py -- so you can SEE it tracking your eyes, instead of
-        # only trusting a text status message.
+        # Live camera preview, with the green iris dots drawn by
+        # gaze_engine, so the user can SEE their face is being tracked.
+        # Only shown in the READY stage: during the dots it would pull the
+        # eyes away from the dot and spoil the measurements.
         self.preview_image = Image(
-            size_hint=(None, None), size=(240, 180),
-            pos_hint={"right": 0.98, "top": 0.98},
+            size_hint=(None, None), size=(640, 360),
+            pos_hint={"center_x": 0.5, "center_y": 0.5},
         )
         self.add_widget(self.preview_image)
+
+        # "Face detected" / "Face not detected", just under the preview.
+        self.face_label = Label(
+            font_size=24, bold=True, size_hint=(1, 0.06),
+            pos_hint={"center_x": 0.5, "y": 0.2},
+        )
+        self.add_widget(self.face_label)
+
+        # The Start button. It works by touch/click (for the caregiver) and
+        # by dwell (resting the pointer on it), like every other button.
+        self.start_btn = DwellButton(
+            text="Start Calibration", bold=True, font_size=28,
+            bg_color=PURPLE, text_color=WHITE, radius=16,
+            size_hint=(None, None), size=(380, 90),
+            pos_hint={"center_x": 0.5, "y": 0.06},
+            on_selected=lambda b: self._start_countdown(),
+        )
+        self.start_btn.bind(on_release=lambda b: self._start_countdown())
 
         with self.canvas:
             Color(0.9, 0.2, 0.2, 1)
             self.dot = Ellipse(pos=(-100, -100), size=(40, 40))  # off-screen until shown
 
+    # ---- stage 1: READY ------------------------------------------------
+    def on_pre_enter(self, *args):
+        w, h = Window.size
+        self.targets_px = [(w * fx, h * fy) for fx, fy in CALIBRATION_POINTS]
+        self.target_index = 0
+        self.gaze_engine.clear_calibration()
+        self.stage = "ready"
+        self._leaving = False
+        self.dot.pos = (-100, -100)
+        self._place_label("top", 22, 0.2)
+        self.instruction_label.text = (
+            "Get ready for calibration\n"
+            "Sit about 50 cm from the screen, with your whole face in the camera view.\n"
+            "When calibration starts, keep your head still and follow the red dot with your eyes."
+        )
+        self.face_label.text = "Starting camera..."
+        self.face_label.color = WHITE
+        self.preview_image.opacity = 0   # shown once the first picture arrives
+        # The button is added once the first camera picture arrives.
+        if self.start_btn.parent is not None:
+            self.remove_widget(self.start_btn)
+        self._preview_event = Clock.schedule_interval(self._update_preview, 1 / 15)
+
     def _update_preview(self, dt):
+        """Runs 15 times a second during the READY stage: shows the newest
+        camera picture and whether a face is detected."""
+        if not self.gaze_engine.is_camera_ok():
+            # No camera (or MediaPipe failed) -- don't leave the user stuck
+            # on this screen; continue with mouse control instead.
+            self._stop_preview()
+            self.face_label.text = "No camera detected -- using mouse control instead."
+            self.face_label.color = RED_TEXT
+            self._leave_after(2.0)
+            return
+
         frame = self.gaze_engine.get_debug_frame()
         if frame is None:
-            return
+            return  # camera still starting up
+
         h, w = frame.shape[:2]
         flipped = frame[::-1]  # Kivy textures are bottom-up; camera frames are top-down
         texture = Texture.create(size=(w, h), colorfmt="rgb")
         texture.blit_buffer(flipped.tobytes(), colorfmt="rgb", bufferfmt="ubyte")
         self.preview_image.texture = texture
+        self.preview_image.opacity = 1
 
-    def on_pre_enter(self, *args):
-        w, h = Window.size
-        mid_y = h * 0.5
-        # left / center / right, matching gaze_engine's horizontal-only calibration
-        self.targets_px = [(w * 0.08, mid_y), (w * 0.5, mid_y), (w * 0.92, mid_y)]
-        self.target_index = 0
-        self.gaze_engine.clear_calibration()
-        self.instruction_label.text = "Starting camera..."
-        self._preview_event = Clock.schedule_interval(self._update_preview, 1 / 15)
+        if self.gaze_engine.get_latest_feature() is not None:
+            self.face_label.text = "Face detected -- press Start when you are ready"
+            self.face_label.color = GREEN_TEXT
+        else:
+            self.face_label.text = "Face not detected -- move into the camera view"
+            self.face_label.color = RED_TEXT
 
-        # The camera/MediaPipe setup happens in a background thread and
-        # takes a moment to either succeed or fail -- wait briefly rather
-        # than checking is_camera_ok() immediately, which could catch it
-        # mid-startup and wrongly assume it failed.
-        Clock.schedule_once(self._check_camera_and_start, 1.0)
+        # The camera works, so the user may start now.
+        if self.start_btn.parent is None:
+            self.add_widget(self.start_btn)
 
-    def on_leave(self, *args):
+    def _stop_preview(self):
         if self._preview_event is not None:
             self._preview_event.cancel()
             self._preview_event = None
 
-    def _done(self):
-        """Leaves calibration, but only if it is still the screen on display.
-        Calibration's timers keep running after the screen is left, and
-        must never pull the user away from another screen later."""
-        if self.manager is not None and self.manager.current == self.name:
-            self.on_done()
+    def _place_label(self, where, font_size, height):
+        """Moves the instruction text: "top" = a strip along the top edge,
+        "center" = large in the middle of the screen (countdown, result)."""
+        self.instruction_label.font_size = font_size
+        self.instruction_label.size_hint_y = height
+        if where == "top":
+            self.instruction_label.pos_hint = {"x": 0, "top": 1}
+            self.instruction_label.valign = "top"
+        else:
+            self.instruction_label.pos_hint = {"x": 0, "center_y": 0.5}
+            self.instruction_label.valign = "middle"
 
-    def _check_camera_and_start(self, dt):
-        if self.manager is None or self.manager.current != self.name:
-            return  # calibration was left before the camera check ran
-        if not self.gaze_engine.is_camera_ok():
-            # No camera available -- skip calibration entirely rather than
-            # get the user stuck staring at dots that can't be measured.
-            self.instruction_label.text = "No camera detected -- using mouse control instead."
-            Clock.schedule_once(lambda dt: self._done(), 1.5)
+    # ---- stage 2: COUNTDOWN ----------------------------------------------
+    def _start_countdown(self):
+        if self.stage != "ready":
+            return  # already started (e.g. tapped and dwelled at the same time)
+        self.stage = "countdown"
+        self._stop_preview()
+        self.remove_widget(self.start_btn)
+        self.preview_image.opacity = 0   # hide the preview from now on
+        self.face_label.text = ""
+        self._place_label("center", 48, 0.3)
+        self._countdown_left = COUNTDOWN_SECONDS
+        self._show_countdown()
+        self._countdown_event = Clock.schedule_interval(self._countdown_tick, 1.0)
+
+    def _show_countdown(self):
+        self.instruction_label.text = (
+            f"Calibration starts in {self._countdown_left}\n"
+            "Look at the red dot when it appears"
+        )
+
+    def _countdown_tick(self, dt):
+        self._countdown_left -= 1
+        if self._countdown_left > 0:
+            self._show_countdown()
             return
+        self._countdown_event.cancel()
+        self._countdown_event = None
+        # Smaller text in a thin strip at the top, so it never covers a dot.
+        self._place_label("top", 20, 0.1)
+        self.stage = "dots"
         self._show_current_target()
 
+    # ---- stage 3: DOTS ---------------------------------------------------
     def _show_current_target(self):
         x, y = self.targets_px[self.target_index]
         self.dot.pos = (x - 20, y - 20)
@@ -993,18 +1101,18 @@ class CalibrationScreen(Screen):
 
     def _collect_sample(self, dt):
         feature = self.gaze_engine.get_latest_feature()
-        if feature is not None:
-            self.samples.append(feature[0])  # only fx matters right now
-
         elapsed = time.time() - self._target_start_time
+        # Ignore the first moment at each dot: the eyes are still moving there.
+        if feature is not None and elapsed >= CALIBRATION_SETTLE_TIME:
+            self.samples.append(feature[0])  # only fx (horizontal) is used for now
+
         remaining = max(0.0, CALIBRATION_CAPTURE_TIME - elapsed)
         point_num = self.target_index + 1
         total_points = len(self.targets_px)
-        face_status = "face detected" if feature is not None else "face NOT detected -- move into camera view"
+        face_status = "face detected" if feature is not None else "FACE NOT DETECTED -- move into camera view"
         self.instruction_label.text = (
-            f"LOOK AT THE RED DOT  ({point_num} of {total_points})\n"
-            f"Hold still -- {remaining:.1f}s left\n"
-            f"[{face_status}]"
+            f"Look at the red dot  ({point_num} of {total_points})  --  "
+            f"{remaining:.1f}s  --  [{face_status}]"
         )
 
     def _finish_current_target(self, dt):
@@ -1025,6 +1133,7 @@ class CalibrationScreen(Screen):
 
     def _finish_calibration(self):
         self.dot.pos = (-100, -100)
+        self._place_label("center", 36, 0.3)
         try:
             self.gaze_engine.fit_calibration()
             self.instruction_label.text = "Calibration complete!"
@@ -1033,7 +1142,27 @@ class CalibrationScreen(Screen):
             # fall back to mouse rather than leaving gaze half-broken.
             print(f"[Calibration] {e} -- falling back to mouse control.")
             self.instruction_label.text = "Calibration incomplete -- using mouse control instead."
-        Clock.schedule_once(lambda dt: self._done(), 1.0)
+        self._leave_after(1.0)
+
+    # ---- leaving -----------------------------------------------------------
+    def _leave_after(self, seconds):
+        if self._leaving:
+            return  # already on the way out
+        self._leaving = True
+        Clock.schedule_once(lambda dt: self._done(), seconds)
+
+    def on_leave(self, *args):
+        self._stop_preview()
+        if self._countdown_event is not None:
+            self._countdown_event.cancel()
+            self._countdown_event = None
+
+    def _done(self):
+        """Leaves calibration, but only if it is still the screen on display.
+        Calibration's timers keep running after the screen is left, and
+        must never pull the user away from another screen later."""
+        if self.manager is not None and self.manager.current == self.name:
+            self.on_done()
 
 
 # ---------------------------------------------------------------------------
@@ -1063,6 +1192,11 @@ class EyeGlyntApp(App):
         # control if calibration didn't complete.
         self.gaze_manager = GazeManager(sm, gaze_engine=self.gaze_engine)
         return sm
+
+    def on_start(self):
+        # Open maximized, filling the screen but keeping the title bar, so
+        # the window can still be closed or moved normally.
+        Window.maximize()
 
     def on_stop(self):
         self.gaze_engine.stop()
