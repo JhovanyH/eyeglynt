@@ -933,7 +933,7 @@ class CalibrationScreen(Screen):
         super().__init__(**kwargs)
         self.gaze_engine = gaze_engine
         self.on_done = on_done
-        self.targets_px = []
+        self.current_target_px = None  # (x, y) of the dot on display
         self.target_index = 0
         self.samples = []
         self.stage = "ready"           # "ready", "countdown" or "dots"
@@ -986,8 +986,6 @@ class CalibrationScreen(Screen):
 
     # ---- stage 1: READY ------------------------------------------------
     def on_pre_enter(self, *args):
-        w, h = Window.size
-        self.targets_px = [(w * fx, h * fy) for fx, fy in CALIBRATION_POINTS]
         self.target_index = 0
         self.gaze_engine.clear_calibration()
         self.stage = "ready"
@@ -1092,7 +1090,13 @@ class CalibrationScreen(Screen):
 
     # ---- stage 3: DOTS ---------------------------------------------------
     def _show_current_target(self):
-        x, y = self.targets_px[self.target_index]
+        # The dot's position is worked out from the screen's size NOW, not
+        # when the app started: the window is still growing to full size
+        # (maximizing) at start-up, and using that early, smaller size put
+        # every dot in the left part of the screen.
+        fx, fy = CALIBRATION_POINTS[self.target_index]
+        x, y = self.width * fx, self.height * fy
+        self.current_target_px = (x, y)
         self.dot.pos = (x - 20, y - 20)
         self.samples = []
         self._target_start_time = time.time()
@@ -1108,7 +1112,7 @@ class CalibrationScreen(Screen):
 
         remaining = max(0.0, CALIBRATION_CAPTURE_TIME - elapsed)
         point_num = self.target_index + 1
-        total_points = len(self.targets_px)
+        total_points = len(CALIBRATION_POINTS)
         face_status = "face detected" if feature is not None else "FACE NOT DETECTED -- move into camera view"
         self.instruction_label.text = (
             f"Look at the red dot  ({point_num} of {total_points})  --  "
@@ -1122,11 +1126,11 @@ class CalibrationScreen(Screen):
 
         if self.samples:
             avg_fx = sum(self.samples) / len(self.samples)
-            target_x, _ = self.targets_px[self.target_index]
+            target_x, _ = self.current_target_px
             self.gaze_engine.add_calibration_point(avg_fx, target_x)
 
         self.target_index += 1
-        if self.target_index < len(self.targets_px):
+        if self.target_index < len(CALIBRATION_POINTS):
             self._show_current_target()
         else:
             self._finish_calibration()
