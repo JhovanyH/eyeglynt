@@ -92,6 +92,15 @@ SCREEN_W, SCREEN_H = 1280, 800
 Window.size = (SCREEN_W, SCREEN_H)
 
 DWELL_TIME = 1.5  # seconds -- matches the 1.5s example in your flowchart section
+
+# Gaze is never perfectly steady: the pointer jitters by a few millimetres
+# even when the eyes are still, and a blink can throw it off for a moment.
+# Without help, every jitter across a button's edge restarts the dwell, so
+# a selection may never finish. Two settings make buttons "sticky":
+STICKY_MARGIN = 60   # pixels (about 1 cm): the button being dwelled on still
+                     # counts as looked at while the pointer is this close to it
+LEAVE_DELAY = 0.3    # seconds: the pointer must stay away from the button this
+                     # long before its dwell is cancelled (rides out blinks)
 REPEAT_TIME = DWELL_TIME  # held keys repeat at the SAME rate as the initial dwell,
                           # so there's only one dwell-time value to document/defend.
                           # Set this to a different (smaller) number later if you
@@ -351,12 +360,16 @@ class GazeManager:
     pointer Y too if the up/down (PCCR) calibration succeeded. Each one
     falls back to the mouse on its own whenever gaze can't give it (not
     calibrated, no face, no glint), so the app is never left unusable.
+
+    Buttons are "sticky" (see STICKY_MARGIN and LEAVE_DELAY), so a
+    jittery pointer or a blink doesn't restart a dwell that is under way.
     """
 
     def __init__(self, screen_manager: ScreenManager, gaze_engine: GazeEngine = None):
         self.sm = screen_manager
         self.gaze_engine = gaze_engine
         self._current_target = None
+        self._away_since = None  # when the pointer left the current button, or None
         Clock.schedule_interval(self._update, 1 / 30)
 
     def get_pointer_pos(self):
@@ -375,20 +388,43 @@ class GazeManager:
         if active_screen is None:
             return
         pos = self.get_pointer_pos()
+        buttons = [btn for btn in _find_dwell_buttons(active_screen)
+                   if not btn.disabled and btn.selectable]  # greyed-out/display-only can't be selected
+        current = self._current_target
+
+        # Sticky buttons (see STICKY_MARGIN and LEAVE_DELAY): keep dwelling
+        # on the current button while the pointer is near it...
+        if current in buttons and self._is_near(current, pos, STICKY_MARGIN):
+            self._away_since = None
+            return
+        # ...and give it up only once the pointer has been away for a moment.
+        if current in buttons:
+            now = time.time()
+            if self._away_since is None:
+                self._away_since = now
+            if now - self._away_since < LEAVE_DELAY:
+                return
+        self._away_since = None
+
         target = None
-        for btn in _find_dwell_buttons(active_screen):
-            if btn.disabled or not btn.selectable:
-                continue  # greyed-out or display-only buttons can't be selected
-            local = btn.to_widget(*pos)
-            if btn.collide_point(*local):
+        for btn in buttons:
+            if self._is_near(btn, pos, 0):
                 target = btn
                 break
-        if target is not self._current_target:
-            if self._current_target is not None:
-                self._current_target.cancel_dwell()
+        if target is not current:
+            if current is not None:
+                current.cancel_dwell()
             self._current_target = target
             if target is not None:
                 target.start_dwell()
+
+    @staticmethod
+    def _is_near(btn, pos, margin):
+        """True if `pos` (window coordinates) is on the button or within
+        `margin` pixels of its edges."""
+        x, y = btn.to_widget(*pos)
+        return (btn.x - margin <= x <= btn.right + margin
+                and btn.y - margin <= y <= btn.top + margin)
 
 
 # ---------------------------------------------------------------------------
@@ -924,9 +960,9 @@ class QuickFireScreen(AppScreen):
 
 
 # ---------------------------------------------------------------------------
-# 6. CALIBRATION SCREEN -- get ready, head movement, then a 9-point calibration
+# 6. CALIBRATION SCREEN -- get ready, then a 9-point calibration
 # ---------------------------------------------------------------------------
-# The screen has four stages:
+# The screen has three stages:
 #   1. READY:     a large camera preview and a Start Calibration button, so
 #                 the user can sit correctly and see their face is detected
 #                 before anything starts. The button only appears once the
@@ -934,12 +970,7 @@ class QuickFireScreen(AppScreen):
 #                 can never make calibration begin before the user is ready.
 #   2. COUNTDOWN: 3, 2, 1 after Start is pressed, so the user has time to
 #                 put their hands down and look at the screen.
-#   3. HEAD:      the red dot stays in the centre while the user keeps
-#                 looking at it and moves their head (turn left/right, then
-#                 nod up/down). The eyes' target doesn't change, so the
-#                 gaze engine learns how much head movement alone changes
-#                 its readings, and removes that from then on.
-#   4. DOTS:      the red dot visits 9 points (a 3 x 3 grid) and the gaze
+#   3. DOTS:      the red dot visits 9 points (a 3 x 3 grid) and the gaze
 #                 is measured at each one.
 #
 # Each of the 3 columns is measured 3 times and each of the 3 rows 3
@@ -961,8 +992,6 @@ CALIBRATION_CAPTURE_TIME = 2.0  # seconds the dot stays at each point
 CALIBRATION_SETTLE_TIME = 0.5   # first part of those seconds is ignored: the
                                 # eyes are still moving onto the new dot
 COUNTDOWN_SECONDS = 3           # 3, 2, 1 after Start is pressed
-HEAD_MOVE_TIME = 8.0            # seconds of the head-movement stage: the first
-                                # half turning left/right, the second nodding
 
 GREEN_TEXT = rgb(120, 220, 120)  # "Face detected"
 RED_TEXT = rgb(255, 120, 120)    # "Face not detected"
@@ -977,14 +1006,11 @@ class CalibrationScreen(Screen):
         self.current_target_px = None  # (x, y) of the dot on display
         self.target_index = 0
         self.samples = []
-        self.stage = "ready"           # "ready", "countdown", "head" or "dots"
+        self.stage = "ready"           # "ready", "countdown" or "dots"
         self._countdown_left = 0
         self._sample_event = None
         self._preview_event = None
         self._countdown_event = None
-        self._head_event = None
-        self._head_start_event = None
-        self.head_summary = ""         # result of the head stage, shown at the end
         self._leaving = False          # True once we've decided to leave
 
         # Instructions at the top of the screen. Its height changes per
@@ -1039,7 +1065,7 @@ class CalibrationScreen(Screen):
         self.instruction_label.text = (
             "Get ready for calibration\n"
             "Sit about 40 cm from the camera, with your whole face in the camera view.\n"
-            "First keep looking at the red dot while you move your head; then keep your head still and follow the dot.\n"
+            "When calibration starts, keep your head still and follow the red dot with your eyes.\n"
             "Preview: green = iris, white = IR glints, yellow = pupil."
         )
         self.face_label.text = "Starting camera..."
@@ -1135,47 +1161,10 @@ class CalibrationScreen(Screen):
         self._countdown_event = None
         # Smaller text in a thin strip at the top, so it never covers a dot.
         self._place_label("top", 20, 0.1)
-        self._start_head_stage()
+        self.stage = "dots"
+        self._show_current_target()
 
-    # ---- stage 3: HEAD ---------------------------------------------------
-    def _start_head_stage(self):
-        self.stage = "head"
-        fx, fy = CALIBRATION_POINTS[0]   # the centre dot
-        x, y = self.width * fx, self.height * fy
-        self.dot.pos = (x - 20, y - 20)
-        self._head_start_time = time.time()
-        # Recording starts after the settle time, once the eyes are on the dot.
-        self._head_start_event = Clock.schedule_once(
-            lambda dt: self.gaze_engine.start_head_calibration(), CALIBRATION_SETTLE_TIME)
-        self._head_event = Clock.schedule_interval(self._update_head_stage, 1 / 10)
-
-    def _update_head_stage(self, dt):
-        """Runs 10 times a second during the HEAD stage: tells the user how
-        to move their head, and ends the stage when the time is up."""
-        elapsed = time.time() - self._head_start_time
-        if elapsed >= HEAD_MOVE_TIME:
-            self._stop_head_stage()
-            self.head_summary = self.gaze_engine.finish_head_calibration()
-            self.stage = "dots"
-            self._show_current_target()
-            return
-        if elapsed < HEAD_MOVE_TIME / 2:
-            movement = "slowly turn your head LEFT and RIGHT"
-        else:
-            movement = "slowly nod your head UP and DOWN"
-        self.instruction_label.text = (
-            f"Keep your eyes on the red dot and {movement}  --  "
-            f"{HEAD_MOVE_TIME - elapsed:.0f}s"
-        )
-
-    def _stop_head_stage(self):
-        for event in (self._head_event, self._head_start_event):
-            if event is not None:
-                event.cancel()
-        self._head_event = None
-        self._head_start_event = None
-
-    # ---- stage 4: DOTS ---------------------------------------------------
+    # ---- stage 3: DOTS ---------------------------------------------------
     def _show_current_target(self):
         # The dot's position is worked out from the screen's size NOW, not
         # when the app started: the window is still growing to full size
@@ -1236,7 +1225,7 @@ class CalibrationScreen(Screen):
         self._place_label("center", 36, 0.3)
         try:
             summary = self.gaze_engine.fit_calibration()
-            self.instruction_label.text = f"Calibration complete!\n{summary}\n{self.head_summary}"
+            self.instruction_label.text = f"Calibration complete!\n{summary}"
         except ValueError as e:
             # Not enough usable samples (e.g. face wasn't visible) --
             # fall back to mouse rather than leaving gaze half-broken.
@@ -1253,10 +1242,6 @@ class CalibrationScreen(Screen):
 
     def on_leave(self, *args):
         self._stop_preview()
-        if self.stage == "head":
-            # Left in the middle of the head stage: stop recording.
-            self._stop_head_stage()
-            self.gaze_engine.finish_head_calibration()
         if self._countdown_event is not None:
             self._countdown_event.cancel()
             self._countdown_event = None

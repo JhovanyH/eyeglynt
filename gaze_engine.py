@@ -7,7 +7,6 @@ so it never blocks Kivy's UI loop, and exposes a small, simple API:
     engine = GazeEngine()
     engine.start()
     engine.get_latest_feature()   -> (fx, vy) or None; vy may be None
-    engine.start_head_calibration() / engine.finish_head_calibration()
     engine.add_calibration_point(fx, screen_x, vy, screen_y)
     engine.fit_calibration()
     engine.get_screen_x()         -> predicted screen X, or None
@@ -135,27 +134,6 @@ SMOOTHING_ALPHA = 0.25
 # means no relationship at all. Below this value that axis falls back to
 # the mouse, so a bad calibration can't make the pointer jump around.
 MIN_FIT_R2 = 0.6
-
-# --- Head-movement correction ------------------------------------------
-# fx and vy measure where the eyes point INSIDE the head. When the head
-# turns or moves, the user looks somewhere else even if the eyes have
-# not moved inside the head, so the pointer would drift. Calibration
-# therefore starts with a head-movement step: the user keeps looking at
-# one dot and moves their head. The eyes' target never changes during
-# that step, so every change in fx and vy is caused by the head. A
-# straight-line fit learns how much fx changes per unit of head turn and
-# vy per unit of head nod, and from then on that amount is subtracted
-# (see _fit_head_effect and _remove_head_effect).
-#
-# The head is measured by where the nose tip sits on the face as seen
-# by the camera. This also covers moving the head sideways or up/down,
-# not just turning it: a face that moves to one side of the camera is
-# seen slightly from the side, exactly as if it had turned.
-NOSE_TIP = 1
-FACE_SIDES = (234, 454)          # the left and right edge of the face
-FOREHEAD_AND_CHIN = (10, 152)
-HEAD_MIN_SAMPLES = 20            # readings needed from the head-movement step
-HEAD_MIN_MOVEMENT = 0.005        # less head movement than this is ignored
 
 
 def _ensure_model_downloaded():
@@ -380,48 +358,6 @@ def _fit_line(inputs, outputs):
     return float(a), float(b), float(r2)
 
 
-def _compute_head_position(landmarks):
-    """Two numbers describing which way the head points, as seen by the
-    camera, for the head-movement correction:
-      turn: where the nose tip sits between the two sides of the face,
-            from -0.5 to 0.5 (0 = in the middle); changes when the head
-            turns left/right or moves sideways
-      nod:  where the nose tip sits between forehead and chin, from -0.5
-            to 0.5; changes when the head nods or moves up/down
-    turn is used to correct fx (left/right) and nod to correct vy."""
-    nose = landmarks[NOSE_TIP]
-    side_a, side_b = landmarks[FACE_SIDES[0]], landmarks[FACE_SIDES[1]]
-    top, bottom = landmarks[FOREHEAD_AND_CHIN[0]], landmarks[FOREHEAD_AND_CHIN[1]]
-    turn = (nose.x - side_a.x) / (side_b.x - side_a.x) - 0.5 if side_b.x != side_a.x else 0.0
-    nod = (nose.y - top.y) / (bottom.y - top.y) - 0.5 if bottom.y != top.y else 0.0
-    return turn, nod
-
-
-def _fit_head_effect(values, head_values):
-    """Learns how much `values` (fx or vy readings, taken while the user
-    looked at ONE dot and moved their head) change with the head number
-    in `head_values` (turn for fx, nod for vy).
-
-    Fits the straight line  value = c * head + b  (_fit_line). Returns
-    (c, average head number), or None if there are too few readings or
-    the head barely moved."""
-    if len(values) < HEAD_MIN_SAMPLES or np.std(head_values) < HEAD_MIN_MOVEMENT:
-        return None
-    c, _b, _r2 = _fit_line(head_values, values)
-    return c, float(np.mean(head_values))
-
-
-def _remove_head_effect(value, fit, head):
-    """Subtracts the part of `value` (fx or vy) caused by the head having
-    moved away from where it was on average during the head-movement
-    step. `head` is the matching head number (turn or nod). No change if
-    there is no fit or no value."""
-    if value is None or fit is None:
-        return value
-    c, head_average = fit
-    return value - c * (head - head_average)
-
-
 # ---------------------------------------------------------------------
 # Camera backends
 # ---------------------------------------------------------------------
@@ -532,8 +468,6 @@ class GazeEngine:
         self._latest_feature = None  # (fx, vy), or None if no face seen
         self._smoothed_fx = None     # internal EMA state, background-thread only
         self._smoothed_vy = None
-        self._smoothed_turn = None   # head numbers (see _compute_head_position),
-        self._smoothed_nod = None    # smoothed like fx and vy
         self._missed_glint_frames = 0
         self._latest_debug_frame = None  # RGB numpy frame with dots drawn, for a live preview
         self._latest_eyes = None  # (full frame, glint/pupil points, iris centres) for close-ups
@@ -548,15 +482,6 @@ class GazeEngine:
         self._y_points = []  # (vy, screen_y)
         self._x_fit = None
         self._y_fit = None
-
-        # Head-movement correction (see the settings at the top). While
-        # _recording_head is True, every reading is stored in
-        # _head_samples as (fx, vy, turn, nod). Each fit is (c, average)
-        # from _fit_head_effect, or None for no correction.
-        self._recording_head = False
-        self._head_samples = []
-        self._head_fit_x = None
-        self._head_fit_y = None
 
     # ---- lifecycle ---------------------------------------------------
     def start(self):
@@ -622,8 +547,6 @@ class GazeEngine:
                 # Reset so re-acquiring doesn't drag from a stale position.
                 self._smoothed_fx = None
                 self._smoothed_vy = None
-                self._smoothed_turn = None
-                self._smoothed_nod = None
             else:
                 landmarks = result.face_landmarks[0]
                 fx = _compute_horizontal_feature(landmarks, sw, sh)
@@ -643,20 +566,7 @@ class GazeEngine:
                     self._missed_glint_frames += 1
                     if self._missed_glint_frames > MAX_MISSED_GLINT_FRAMES:
                         self._smoothed_vy = None
-                turn, nod = _compute_head_position(landmarks)
-                self._smoothed_turn = self._smooth(self._smoothed_turn, turn)
-                self._smoothed_nod = self._smooth(self._smoothed_nod, nod)
-                if self._recording_head:
-                    with self._lock:
-                        self._head_samples.append((self._smoothed_fx, self._smoothed_vy,
-                                                   self._smoothed_turn, self._smoothed_nod))
-
-                # Remove the effect of head movement (none until the
-                # head-movement step of calibration has been done).
-                feature = (
-                    _remove_head_effect(self._smoothed_fx, self._head_fit_x, self._smoothed_turn),
-                    _remove_head_effect(self._smoothed_vy, self._head_fit_y, self._smoothed_nod),
-                )
+                feature = (self._smoothed_fx, self._smoothed_vy)
 
                 # Preview dots: green = iris (MediaPipe), white = glint,
                 # yellow = pupil found in the picture.
@@ -734,40 +644,6 @@ class GazeEngine:
         self._y_points = []
         self._x_fit = None
         self._y_fit = None
-        self._head_fit_x = None
-        self._head_fit_y = None
-
-    def start_head_calibration(self):
-        """Starts the head-movement step: from now on every reading is
-        stored, while the user looks at one dot and moves their head.
-        Any earlier head correction is switched off first."""
-        with self._lock:
-            self._head_fit_x = None
-            self._head_fit_y = None
-            self._head_samples = []
-            self._recording_head = True
-
-    def finish_head_calibration(self):
-        """Ends the head-movement step and fits the correction from the
-        stored readings. Returns a short text saying whether it is on."""
-        with self._lock:
-            self._recording_head = False
-            samples = self._head_samples
-            self._head_samples = []
-        fit_x = _fit_head_effect([fx for fx, vy, turn, nod in samples],
-                                 [turn for fx, vy, turn, nod in samples])
-        with_vy = [(vy, nod) for fx, vy, turn, nod in samples if vy is not None]
-        fit_y = _fit_head_effect([vy for vy, nod in with_vy],
-                                 [nod for vy, nod in with_vy])
-        self._head_fit_x = fit_x
-        self._head_fit_y = fit_y
-        print(f"[Calibration] head step: {len(samples)} readings; "
-              f"left/right correction {fit_x}, up/down correction {fit_y}")
-        if fit_x is None:
-            return "Head correction off (head didn't move, or face not seen)."
-        if fit_y is None:
-            return "Head correction on for left/right only."
-        return "Head correction on."
 
     def fit_calibration(self):
         """Fits screen_x = a*fx + b, and screen_y = c*vy + d if there is
