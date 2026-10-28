@@ -73,12 +73,11 @@ MODEL_URL = (
 # is only sharp within a few centimetres of this distance, so measure
 # from the camera to the user's eyes and set it here.
 PI_FOCUS_DISTANCE_M = 0.4
-# The camera is mounted upside down (its ribbon cable comes out of the
-# top), so its picture comes out upside down. MediaPipe is made for
-# upright faces, so read() turns the picture the right way up first.
-# Set this to False if the camera is mounted the other way round, i.e.
-# if `rpicam-hello` shows your face the right way up.
-PI_CAMERA_UPSIDE_DOWN = True
+# Set this to True only if the camera is mounted upside down, i.e. if
+# the app's preview shows your face upside down. read() then turns the
+# picture the right way up first, because MediaPipe is made for upright
+# faces.
+PI_CAMERA_UPSIDE_DOWN = False
 # The Pi captures at 1536x864, the sensor's own full-view mode. The
 # glints are only a few pixels wide, so the eyes need this detail.
 # MediaPipe gets a half-size copy (768x432, every 2nd pixel), because it
