@@ -1177,7 +1177,8 @@ class CalibrationScreen(Screen):
         self.current_target_px = (x, y)
         self.dot.pos = (x - 20, y - 20)
         self.samples = []      # fx readings (left/right) at this dot
-        self.samples_vy = []   # vy readings (up/down), only when a glint is seen
+        self.samples_vy = []   # vy readings (up/down, glints), only when a glint is seen
+        self.samples_iy = []   # iy readings (up/down, iris against the eye corners)
         self._target_start_time = time.time()
         self._sample_event = Clock.schedule_interval(self._collect_sample, 1 / 30)
         Clock.schedule_once(self._finish_current_target, CALIBRATION_CAPTURE_TIME)
@@ -1187,8 +1188,9 @@ class CalibrationScreen(Screen):
         elapsed = time.time() - self._target_start_time
         # Ignore the first moment at each dot: the eyes are still moving there.
         if feature is not None and elapsed >= CALIBRATION_SETTLE_TIME:
-            fx, vy = feature
+            fx, vy, iy = feature
             self.samples.append(fx)
+            self.samples_iy.append(iy)
             if vy is not None:
                 self.samples_vy.append(vy)
 
@@ -1214,7 +1216,8 @@ class CalibrationScreen(Screen):
             avg_vy = None
             if len(self.samples_vy) >= len(self.samples) / 2:
                 avg_vy = sum(self.samples_vy) / len(self.samples_vy)
-            self.gaze_engine.add_calibration_point(avg_fx, target_x, avg_vy, target_y)
+            avg_iy = sum(self.samples_iy) / len(self.samples_iy)
+            self.gaze_engine.add_calibration_point(avg_fx, target_x, avg_vy, target_y, avg_iy)
 
         self.target_index += 1
         if self.target_index < len(CALIBRATION_POINTS):

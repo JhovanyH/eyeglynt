@@ -6,8 +6,8 @@ so it never blocks Kivy's UI loop, and exposes a small, simple API:
 
     engine = GazeEngine()
     engine.start()
-    engine.get_latest_feature()   -> (fx, vy) or None; vy may be None
-    engine.add_calibration_point(fx, screen_x, vy, screen_y)
+    engine.get_latest_feature()   -> (fx, vy, iy) or None; vy may be None
+    engine.add_calibration_point(fx, screen_x, vy, screen_y, iy)
     engine.fit_calibration()
     engine.get_screen_x()         -> predicted screen X, or None
     engine.get_screen_y()         -> predicted screen Y, or None
@@ -25,8 +25,15 @@ looking. The old method (iris position between the eyelids) failed for
 up/down because the eyelids move together with the eye; the glints do
 not, which is why PCCR works where it failed.
 
-On a laptop webcam there are no IR glints, so vy is usually None and
-the app keeps using the mouse for up/down.
+Up/down, second measurement (iy): where the iris centre sits above or
+below the line between the two eye corners (MediaPipe landmarks). The
+eye corners don't move when the eye or the eyelids move, so this also
+follows the eye. Calibration tries vy, iy and both together, and uses
+whichever fits the calibration dots best.
+
+On a laptop webcam there are no IR glints, so vy is usually None; iy
+can still give up/down if it fits well enough, otherwise the app keeps
+using the mouse for up/down.
 """
 
 import os
@@ -162,6 +169,24 @@ def _compute_horizontal_feature(landmarks, w, h):
     rfx, _ = _normalized_iris_position(landmarks, RIGHT_IRIS_CENTER, RIGHT_EYE_CONTOUR, w, h)
     lfx, _ = _normalized_iris_position(landmarks, LEFT_IRIS_CENTER, LEFT_EYE_CONTOUR, w, h)
     return (rfx + lfx) / 2
+
+
+def _compute_iris_height(landmarks, w, h):
+    """iy: how far the iris centre sits below the line between the two
+    eye corners, divided by the eye's width, averaged over both eyes
+    (bigger = looking further down). The corners stay put when the eye
+    or the eyelids move, so this follows the eye itself. (The old method
+    measured the iris against the eyelids instead, and failed because
+    the eyelids move up and down together with the eye.)"""
+    total = 0.0
+    for iris_idx, (c1, c2) in ((RIGHT_IRIS_CENTER, RIGHT_EYE_CORNERS),
+                               (LEFT_IRIS_CENTER, LEFT_EYE_CORNERS)):
+        a, b, iris = landmarks[c1], landmarks[c2], landmarks[iris_idx]
+        eye_width = abs(b.x - a.x) * w
+        corner_y = (a.y + b.y) / 2 * h          # height of the line between the corners
+        if eye_width > 0:
+            total += (iris.y * h - corner_y) / eye_width
+    return total / 2
 
 
 def _crop_square(image, cx, cy, radius):
@@ -358,6 +383,30 @@ def _fit_line(inputs, outputs):
     return float(a), float(b), float(r2)
 
 
+def _fit_plane(inputs_a, inputs_b, outputs):
+    """Least squares with two inputs: output = a1 * input_a + a2 * input_b + b.
+    Returns (a1, a2, b, r2), with r2 as in _fit_line."""
+    p = np.array(inputs_a, dtype=float)
+    q = np.array(inputs_b, dtype=float)
+    y = np.array(outputs, dtype=float)
+    a_matrix = np.vstack([p, q, np.ones_like(p)]).T
+    a1, a2, b = np.linalg.lstsq(a_matrix, y, rcond=None)[0]
+    predicted = a1 * p + a2 * q + b
+    total = np.sum((y - y.mean()) ** 2)
+    r2 = 1.0 - np.sum((y - predicted) ** 2) / total if total > 0 else 0.0
+    return float(a1), float(a2), float(b), float(r2)
+
+
+def _adjusted_r2(r2, points, inputs):
+    """R squared lowered a little for every input a fit uses. A fit with
+    more inputs always matches the calibration dots a bit better, even
+    when the extra input is just noise; this makes the comparison fair.
+    (The standard "adjusted R squared".)"""
+    if points - inputs - 1 <= 0:
+        return 0.0
+    return 1.0 - (1.0 - r2) * (points - 1) / (points - inputs - 1)
+
+
 # ---------------------------------------------------------------------
 # Camera backends
 # ---------------------------------------------------------------------
@@ -465,9 +514,10 @@ class GazeEngine:
 
     def __init__(self):
         self._lock = threading.Lock()
-        self._latest_feature = None  # (fx, vy), or None if no face seen
+        self._latest_feature = None  # (fx, vy, iy), or None if no face seen
         self._smoothed_fx = None     # internal EMA state, background-thread only
         self._smoothed_vy = None
+        self._smoothed_iy = None
         self._missed_glint_frames = 0
         self._latest_debug_frame = None  # RGB numpy frame with dots drawn, for a live preview
         self._latest_eyes = None  # (full frame, glint/pupil points, iris centres) for close-ups
@@ -479,7 +529,7 @@ class GazeEngine:
         # fit_calibration() runs. Each fit is (a, b, r2) such that
         # screen = a * feature + b, or None if that axis isn't usable.
         self._x_points = []  # (fx, screen_x)
-        self._y_points = []  # (vy, screen_y)
+        self._y_points = []  # (vy, iy, screen_y); vy is None if no glint was seen
         self._x_fit = None
         self._y_fit = None
 
@@ -547,16 +597,19 @@ class GazeEngine:
                 # Reset so re-acquiring doesn't drag from a stale position.
                 self._smoothed_fx = None
                 self._smoothed_vy = None
+                self._smoothed_iy = None
             else:
                 landmarks = result.face_landmarks[0]
                 fx = _compute_horizontal_feature(landmarks, sw, sh)
                 vy, points = _compute_vertical_feature(frame, landmarks)
+                iy = _compute_iris_height(landmarks, sw, sh)
                 fh, fw = frame.shape[:2]
                 iris_centres = [(landmarks[i].x * fw, landmarks[i].y * fh)
                                 for i in (RIGHT_IRIS_CENTER, LEFT_IRIS_CENTER)]
                 eyes = (frame, points, iris_centres)
 
                 self._smoothed_fx = self._smooth(self._smoothed_fx, fx)
+                self._smoothed_iy = self._smooth(self._smoothed_iy, iy)
                 if vy is not None:
                     self._missed_glint_frames = 0
                     self._smoothed_vy = self._smooth(self._smoothed_vy, vy)
@@ -566,7 +619,7 @@ class GazeEngine:
                     self._missed_glint_frames += 1
                     if self._missed_glint_frames > MAX_MISSED_GLINT_FRAMES:
                         self._smoothed_vy = None
-                feature = (self._smoothed_fx, self._smoothed_vy)
+                feature = (self._smoothed_fx, self._smoothed_vy, self._smoothed_iy)
 
                 # Preview dots: green = iris (MediaPipe), white = glint,
                 # yellow = pupil found in the picture.
@@ -589,7 +642,7 @@ class GazeEngine:
         return self._camera_ok
 
     def get_latest_feature(self):
-        """Returns (fx, vy) or None if no face is currently detected.
+        """Returns (fx, vy, iy) or None if no face is currently detected.
         vy is None when no glint is visible (no IR, or a laptop webcam)."""
         with self._lock:
             return self._latest_feature
@@ -632,12 +685,12 @@ class GazeEngine:
     def is_vertical_calibrated(self):
         return self._y_fit is not None
 
-    def add_calibration_point(self, fx, screen_x, vy=None, screen_y=None):
-        """Stores one calibration dot's measurements. vy/screen_y are
-        left out when no glint was seen at that dot."""
+    def add_calibration_point(self, fx, screen_x, vy=None, screen_y=None, iy=None):
+        """Stores one calibration dot's measurements. vy is None when no
+        glint was seen at that dot."""
         self._x_points.append((fx, screen_x))
-        if vy is not None and screen_y is not None:
-            self._y_points.append((vy, screen_y))
+        if screen_y is not None and iy is not None:
+            self._y_points.append((vy, iy, screen_y))
 
     def clear_calibration(self):
         self._x_points = []
@@ -646,8 +699,8 @@ class GazeEngine:
         self._y_fit = None
 
     def fit_calibration(self):
-        """Fits screen_x = a*fx + b, and screen_y = c*vy + d if there is
-        up/down data from at least 2 different dot heights.
+        """Fits screen_x = a*fx + b, and the best up/down fit (see
+        _fit_up_down) if there is data from at least 2 different dot heights.
 
         Returns a short text summary for the user, one line per
         direction. Raises ValueError if the horizontal fit isn't possible
@@ -661,18 +714,42 @@ class GazeEngine:
             raise ValueError(f"left/right fit too weak (R^2 = {r2_x:.2f})")
         self._x_fit = (a, b, r2_x)
 
-        heights = {round(p[1]) for p in self._y_points}
-        if len(heights) < 2:
-            print("[Calibration] up/down: no glints seen -- mouse will control up/down")
+        self._y_fit = self._fit_up_down()
+        if self._y_fit is None:
+            return f"Left/right fit {r2_x:.2f}\nUp/down: not enough data, using the mouse"
+        if self._y_fit["r2"] < MIN_FIT_R2:
+            weak = self._y_fit["r2"]
             self._y_fit = None
-            return f"Left/right fit {r2_x:.2f}\nUp/down: no IR glints seen, using the mouse"
-        c, d, r2_y = _fit_line([p[0] for p in self._y_points], [p[1] for p in self._y_points])
-        print(f"[Calibration] up/down fit: R^2 = {r2_y:.2f} from {len(self._y_points)} points")
-        if r2_y < MIN_FIT_R2:
-            self._y_fit = None
-            return f"Left/right fit {r2_x:.2f}\nUp/down fit {r2_y:.2f} (too weak, using the mouse)"
-        self._y_fit = (c, d, r2_y)
-        return f"Left/right fit {r2_x:.2f}\nUp/down fit {r2_y:.2f}"
+            return f"Left/right fit {r2_x:.2f}\nUp/down fit {weak:.2f} (too weak, using the mouse)"
+        return f"Left/right fit {r2_x:.2f}\nUp/down fit {self._y_fit['r2']:.2f} ({self._y_fit['name']})"
+
+    def _fit_up_down(self):
+        """Tries three straight-line fits for up/down -- glints only (vy),
+        iris only (iy), and both together -- and returns the best one as
+        a dict: "name", the slope for each input used ("vy" and/or "iy"),
+        "b" and "r2" (adjusted, see _adjusted_r2). None if no fit was
+        possible (dots at fewer than 2 heights)."""
+        fits = []
+        all_points = self._y_points
+        glint_points = [p for p in all_points if p[0] is not None]
+        if len({round(sy) for vy, iy, sy in glint_points}) >= 2:
+            c, d, r2 = _fit_line([vy for vy, iy, sy in glint_points], [sy for vy, iy, sy in glint_points])
+            fits.append({"name": "glints", "vy": c, "b": d,
+                         "r2": _adjusted_r2(r2, len(glint_points), 1)})
+            c1, c2, d, r2 = _fit_plane([vy for vy, iy, sy in glint_points],
+                                       [iy for vy, iy, sy in glint_points],
+                                       [sy for vy, iy, sy in glint_points])
+            fits.append({"name": "glints + iris", "vy": c1, "iy": c2, "b": d,
+                         "r2": _adjusted_r2(r2, len(glint_points), 2)})
+        if len({round(sy) for vy, iy, sy in all_points}) >= 2:
+            c, d, r2 = _fit_line([iy for vy, iy, sy in all_points], [sy for vy, iy, sy in all_points])
+            fits.append({"name": "iris", "iy": c, "b": d,
+                         "r2": _adjusted_r2(r2, len(all_points), 1)})
+        if not fits:
+            print("[Calibration] up/down: dots seen at fewer than 2 heights -- mouse will control up/down")
+            return None
+        print("[Calibration] up/down fits: " + ", ".join(f"{f['name']} {f['r2']:.2f}" for f in fits))
+        return max(fits, key=lambda f: f["r2"])
 
     def get_screen_x(self):
         """Returns the predicted screen X from the current gaze feature,
@@ -687,12 +764,20 @@ class GazeEngine:
 
     def get_screen_y(self):
         """Returns the predicted screen Y (Kivy: 0 = bottom) from the
-        current PCCR measurement, or None if up/down isn't calibrated
-        or no glint is currently visible."""
+        current up/down measurements, or None if up/down isn't
+        calibrated, no face is detected, or the fit uses the glints and
+        no glint is currently visible."""
         if self._y_fit is None:
             return None
         feature = self.get_latest_feature()
-        if feature is None or feature[1] is None:
+        if feature is None:
             return None
-        c, d, _r2 = self._y_fit
-        return c * feature[1] + d
+        _fx, vy, iy = feature
+        y = self._y_fit["b"]
+        if "vy" in self._y_fit:
+            if vy is None:
+                return None
+            y += self._y_fit["vy"] * vy
+        if "iy" in self._y_fit:
+            y += self._y_fit["iy"] * iy
+        return y
