@@ -988,9 +988,10 @@ CALIBRATION_POINTS = [
     (0.92, 0.12), (0.50, 0.12), (0.08, 0.12),   # bottom row: right, middle, left
     (0.08, 0.47),                               # middle left
 ]
-CALIBRATION_CAPTURE_TIME = 2.0  # seconds the dot stays at each point
-CALIBRATION_SETTLE_TIME = 0.5   # first part of those seconds is ignored: the
-                                # eyes are still moving onto the new dot
+CALIBRATION_CAPTURE_TIME = 3.0  # seconds the dot stays at each point
+CALIBRATION_SETTLE_TIME = 1.0   # first part of those seconds is ignored: the
+                                # eyes are still moving onto the new dot. Users
+                                # with motor impairments may need this time.
 COUNTDOWN_SECONDS = 3           # 3, 2, 1 after Start is pressed
 RESULT_SECONDS = 10             # how long the result stays on screen
 
