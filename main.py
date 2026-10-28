@@ -992,6 +992,7 @@ CALIBRATION_CAPTURE_TIME = 2.0  # seconds the dot stays at each point
 CALIBRATION_SETTLE_TIME = 0.5   # first part of those seconds is ignored: the
                                 # eyes are still moving onto the new dot
 COUNTDOWN_SECONDS = 3           # 3, 2, 1 after Start is pressed
+RESULT_SECONDS = 10             # how long the result stays on screen
 
 GREEN_TEXT = rgb(120, 220, 120)  # "Face detected"
 RED_TEXT = rgb(255, 120, 120)    # "Face not detected"
@@ -1230,8 +1231,8 @@ class CalibrationScreen(Screen):
             # Not enough usable samples (e.g. face wasn't visible) --
             # fall back to mouse rather than leaving gaze half-broken.
             print(f"[Calibration] {e} -- falling back to mouse control.")
-            self.instruction_label.text = "Calibration incomplete -- using mouse control instead."
-        self._leave_after(3.0)  # long enough to read the result
+            self.instruction_label.text = f"Calibration incomplete: {e}\nUsing mouse control instead."
+        self._leave_after(RESULT_SECONDS)  # long enough to read (or photograph) the result
 
     # ---- leaving -----------------------------------------------------------
     def _leave_after(self, seconds):

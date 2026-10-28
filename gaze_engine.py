@@ -649,9 +649,10 @@ class GazeEngine:
         """Fits screen_x = a*fx + b, and screen_y = c*vy + d if there is
         up/down data from at least 2 different dot heights.
 
-        Returns a short text summary for the user. Raises ValueError if
-        the horizontal fit isn't possible or isn't good enough (e.g. no
-        camera, or no face seen during calibration)."""
+        Returns a short text summary for the user, one line per
+        direction. Raises ValueError if the horizontal fit isn't possible
+        or isn't good enough (e.g. no camera, or no face seen during
+        calibration)."""
         if len(self._x_points) < 2:
             raise ValueError(f"Need at least 2 calibration points, got {len(self._x_points)}")
         a, b, r2_x = _fit_line([p[0] for p in self._x_points], [p[1] for p in self._x_points])
@@ -664,14 +665,14 @@ class GazeEngine:
         if len(heights) < 2:
             print("[Calibration] up/down: no glints seen -- mouse will control up/down")
             self._y_fit = None
-            return f"Left/right fit {r2_x:.2f}. Up/down: no IR glints seen, using the mouse."
+            return f"Left/right fit {r2_x:.2f}\nUp/down: no IR glints seen, using the mouse"
         c, d, r2_y = _fit_line([p[0] for p in self._y_points], [p[1] for p in self._y_points])
         print(f"[Calibration] up/down fit: R^2 = {r2_y:.2f} from {len(self._y_points)} points")
         if r2_y < MIN_FIT_R2:
             self._y_fit = None
-            return f"Left/right fit {r2_x:.2f}. Up/down fit too weak ({r2_y:.2f}), using the mouse."
+            return f"Left/right fit {r2_x:.2f}\nUp/down fit {r2_y:.2f} (too weak, using the mouse)"
         self._y_fit = (c, d, r2_y)
-        return f"Left/right fit {r2_x:.2f}. Up/down fit {r2_y:.2f}."
+        return f"Left/right fit {r2_x:.2f}\nUp/down fit {r2_y:.2f}"
 
     def get_screen_x(self):
         """Returns the predicted screen X from the current gaze feature,
