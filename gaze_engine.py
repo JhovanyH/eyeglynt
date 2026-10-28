@@ -69,8 +69,16 @@ MODEL_URL = (
 #
 # Focus is fixed at the user's working distance instead of autofocus,
 # so the lens never "hunts" in the middle of tracking. The lens position
-# is in dioptres = 1 / distance in metres (0.5 m -> 2.0).
-PI_FOCUS_DISTANCE_M = 0.5
+# is in dioptres = 1 / distance in metres (0.4 m -> 2.5). The picture
+# is only sharp within a few centimetres of this distance, so measure
+# from the camera to the user's eyes and set it here.
+PI_FOCUS_DISTANCE_M = 0.4
+# The camera is mounted upside down (its ribbon cable comes out of the
+# top), so its picture comes out upside down. MediaPipe is made for
+# upright faces, so read() turns the picture the right way up first.
+# Set this to False if the camera is mounted the other way round, i.e.
+# if `rpicam-hello` shows your face the right way up.
+PI_CAMERA_UPSIDE_DOWN = True
 # The Pi captures at 1536x864, the sensor's own full-view mode. The
 # glints are only a few pixels wide, so the eyes need this detail.
 # MediaPipe gets a half-size copy (768x432, every 2nd pixel), because it
@@ -96,10 +104,12 @@ LEFT_EYE_CONTOUR = [249, 263, 362, 373, 374, 380, 381, 382, 384, 385, 386, 387, 
 # no glint at all (IR LEDs off, or a blink).
 GLINT_MIN_BRIGHTNESS = 200   # 0 = black, 255 = white
 GLINT_TOLERANCE = 25
-# The pupil is the darkest part of the iris. The darkest
-# PUPIL_DARKEST_PERCENT % of pixels inside the iris circle are taken
-# as the pupil.
-PUPIL_DARKEST_PERCENT = 15
+# The pupil is the darkest round area of the iris. find_pupil() starts
+# at the darkest point and keeps the pixels around it that are darker
+# than PUPIL_THRESHOLD of the way from that point to the typical iris
+# brightness (0.5 = halfway), within PUPIL_MAX_SIZE of the iris radius.
+PUPIL_THRESHOLD = 0.5
+PUPIL_MAX_SIZE = 0.6
 # Glints are searched for slightly beyond the iris edge (they can sit
 # near the edge when looking far up or down); the pupil only inside it.
 GLINT_SEARCH_SCALE = 1.4
@@ -183,24 +193,79 @@ def find_glint(gray, cx, cy, radius):
     return (x0 + xs.mean(), y0 + ys.mean())
 
 
+def _neighbourhood(image, size, combine):
+    """Combines each pixel with the (2*size+1) x (2*size+1) square around
+    it. combine="mean" blurs (removes single-pixel noise), "min" takes the
+    darkest neighbour, "max" the brightest."""
+    padded = np.pad(image.astype(float), size, mode="edge")
+    h, w = image.shape
+    shifted = [padded[dy:dy + h, dx:dx + w]
+               for dy in range(2 * size + 1) for dx in range(2 * size + 1)]
+    if combine == "mean":
+        return np.mean(shifted, axis=0)
+    if combine == "min":
+        return np.min(shifted, axis=0)
+    return np.max(shifted, axis=0)
+
+
+def _remove_glints(crop):
+    """Paints over the glints, working inwards from their edges.
+
+    A glint often sits ON the pupil. Left alone, it would punch a bright
+    hole in the pupil and pull the pupil centre away. Each round, every
+    glint pixel that touches a non-glint pixel takes the darkest of those
+    neighbours, so a glint on the pupil becomes pupil-dark and a glint on
+    the iris becomes iris-coloured.
+    """
+    # Glint pixels, plus 1 pixel of glow around them.
+    glint = _neighbourhood(crop >= GLINT_MIN_BRIGHTNESS, 1, "max") > 0
+    result = crop.astype(float)
+    for _ in range(10):  # 10 rounds fills glints up to 20 pixels across
+        if not glint.any():
+            break
+        # Darkest NON-glint neighbour of every pixel (glint pixels count as white).
+        darkest_neighbour = _neighbourhood(np.where(glint, 255, result), 1, "min")
+        edge = glint & (darkest_neighbour < 255)  # glint pixels next to a non-glint pixel
+        result[edge] = darkest_neighbour[edge]
+        glint = glint & ~edge
+    return result
+
+
 def find_pupil(gray, cx, cy, radius):
     """Finds the pupil centre near (cx, cy) in a grayscale image.
 
-    Only pixels inside a circle of `radius` are used, so dark eyelashes
-    and eyelid shadows outside the iris are ignored. The darkest
-    PUPIL_DARKEST_PERCENT % of those pixels are the pupil; their centre
-    is returned in full-image coordinates, or None if the crop is empty.
+    1. Paint over the glints, blur the area slightly (to remove noise)
+       and find its darkest point inside a circle
+       of `radius` (the iris): that point is inside the pupil.
+    2. Keep the pixels near that point that are clearly darker than the
+       iris (see PUPIL_THRESHOLD); together they are the pupil.
+    3. Return their centre, in full-image coordinates, or None.
+
+    Starting from the darkest point (instead of using every dark pixel in
+    the iris) means eyelashes or eyelid shadows at the iris edge are not
+    mixed in with the pupil.
     """
     crop, x0, y0 = _crop_square(gray, cx, cy, radius)
     if crop.size == 0:
         return None
-    # Distance of every crop pixel from the circle's centre.
+    smooth = _neighbourhood(_remove_glints(crop), 2, "mean")
     rows, cols = np.ogrid[:crop.shape[0], :crop.shape[1]]
     inside = (cols + x0 - cx) ** 2 + (rows + y0 - cy) ** 2 <= radius ** 2
     if not inside.any():
         return None
-    dark_limit = np.percentile(crop[inside], PUPIL_DARKEST_PERCENT)
-    ys, xs = np.nonzero(inside & (crop <= dark_limit))
+
+    # Step 1: darkest point inside the circle (outside pixels count as white).
+    in_circle = np.where(inside, smooth, 255)
+    seed_y, seed_x = np.unravel_index(np.argmin(in_circle), in_circle.shape)
+    darkest = in_circle[seed_y, seed_x]
+    typical = np.median(smooth[inside])  # typical brightness of the iris
+
+    # Step 2: pupil = pixels near the seed that are darker than the limit.
+    limit = darkest + PUPIL_THRESHOLD * (typical - darkest)
+    near_seed = (cols - seed_x) ** 2 + (rows - seed_y) ** 2 <= (radius * PUPIL_MAX_SIZE) ** 2
+    ys, xs = np.nonzero(inside & near_seed & (smooth <= limit))
+    if len(xs) == 0:
+        return None
     return (x0 + xs.mean(), y0 + ys.mean())
 
 
@@ -365,6 +430,8 @@ class _PiCamera:
 
     def read(self):
         frame = self._picam.capture_array()
+        if PI_CAMERA_UPSIDE_DOWN:
+            frame = frame[::-1, ::-1]  # rotate 180 degrees: flip top-bottom and left-right
         return frame[:, ::-1]  # mirror horizontally (numpy, no OpenCV needed)
 
     def close(self):
@@ -404,6 +471,7 @@ class GazeEngine:
         self._smoothed_vy = None
         self._missed_glint_frames = 0
         self._latest_debug_frame = None  # RGB numpy frame with dots drawn, for a live preview
+        self._latest_eyes = None  # (full frame, glint/pupil points, iris centres) for close-ups
         self._running = False
         self._thread = None
         self._camera_ok = True  # flips False if the camera can't be opened
@@ -474,6 +542,7 @@ class GazeEngine:
             result = landmarker.detect_for_video(mp_image, timestamp_ms)
 
             debug_frame = small.copy()
+            eyes = None
             if not result.face_landmarks:
                 feature = None
                 # Reset so re-acquiring doesn't drag from a stale position.
@@ -483,6 +552,10 @@ class GazeEngine:
                 landmarks = result.face_landmarks[0]
                 fx = _compute_horizontal_feature(landmarks, sw, sh)
                 vy, points = _compute_vertical_feature(frame, landmarks)
+                fh, fw = frame.shape[:2]
+                iris_centres = [(landmarks[i].x * fw, landmarks[i].y * fh)
+                                for i in (RIGHT_IRIS_CENTER, LEFT_IRIS_CENTER)]
+                eyes = (frame, points, iris_centres)
 
                 self._smoothed_fx = self._smooth(self._smoothed_fx, fx)
                 if vy is not None:
@@ -508,6 +581,7 @@ class GazeEngine:
             with self._lock:
                 self._latest_feature = feature
                 self._latest_debug_frame = debug_frame
+                self._latest_eyes = eyes
 
         camera.close()
 
@@ -527,6 +601,31 @@ class GazeEngine:
         None if unavailable."""
         with self._lock:
             return self._latest_debug_frame
+
+    def get_eye_closeup(self, half_size=40, zoom=4):
+        """Returns a picture of both eyes side by side, enlarged `zoom`
+        times, with the glints marked in red and the pupils in blue, for
+        checking what the PCCR measurement is locking onto. None if no
+        face is currently detected."""
+        with self._lock:
+            eyes = self._latest_eyes
+        if eyes is None:
+            return None
+        frame, points, iris_centres = eyes
+        size = 2 * half_size
+        crops = []
+        for cx, cy in iris_centres:
+            crop = np.zeros((size, size, 3), dtype=np.uint8)
+            part, x0, y0 = _crop_square(frame, cx, cy, half_size)
+            crop[:part.shape[0], :part.shape[1]] = part[:size, :size]
+            for kind, px, py in points:
+                lx, ly = int(round(px - x0)), int(round(py - y0))
+                if 0 <= lx < size and 0 <= ly < size:
+                    crop[ly, lx] = (255, 0, 0) if kind == "glint" else (0, 80, 255)
+            crops.append(crop)
+        both = np.concatenate(crops, axis=1)
+        # Enlarge: repeat every pixel `zoom` times down and across.
+        return np.repeat(np.repeat(both, zoom, axis=0), zoom, axis=1)
 
     def is_calibrated(self):
         return self._x_fit is not None
