@@ -434,11 +434,28 @@ QUICK_ACCESS_WORDS = ["Yes", "No", "Please", "Thank you"]
 COMMON_WORDS = ["my", "want", "like", "go", "you", "it", "more", "stop"]
 PHRASES = ["I need help", "I'm hungry", "I'm tired", "I love you"]
 
-# The 26 character keys. The 123 key swaps letters for numbers and
-# punctuation on the SAME buttons, so both layouts must have 10, 9 and 7
-# keys per row.
-LETTER_ROWS = ["QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"]
-SYMBOL_ROWS = ["1234567890", "-/:;()&@\"", ".,?!'#%"]
+# LETTER GROUPS instead of the QWERTY keys of Figure 29. A QWERTY key on
+# this screen is about 1.6 cm wide, but camera eye tracking is usually
+# off by 2 to 3 cm, so single keys were missed. Instead, the keys panel
+# is 8 big buttons (2 rows x 4). First the user picks a GROUP of letters,
+# then the panel shows that group's letters as big buttons and the user
+# picks one; it is typed and the panel goes back to the groups. That is
+# two selections per letter, but every target is about four times as
+# big as a QWERTY key.
+#
+# The 123 button swaps the letters for numbers and punctuation, in the
+# same layout: 5 groups, 26 characters in total.
+LETTER_GROUPS = ["ABCDE", "FGHIJ", "KLMNO", "PQRST", "UVWXYZ"]
+SYMBOL_GROUPS = ["12345", "67890", ".,?!'", "-/:;()", "&@\"#%"]
+
+# Where things go on the 2 x 4 grid of big buttons, numbered row by row
+# from the top left (0 1 2 3 / 4 5 6 7).
+KEY_GRID_COLUMNS = 4
+GROUP_CELLS = (0, 1, 2, 4, 5)   # the 5 groups
+SPACE_CELL = 3
+MODE_CELL = 6                   # 123 / ABC
+SHIFT_CELL = 7
+BACK_CELL = 7                   # when a group is open: back to the groups
 
 SENTENCE_END = (".", "?", "!")
 ATTACHING_PUNCTUATION = ".,?!"  # punctuation that belongs right after a word
@@ -526,8 +543,8 @@ class KeyboardScreen(AppScreen):
 
     Layout, top to bottom: title bar with Home and Back; a body with the
     mode tabs on the left and, on the right, the message box with Speak,
-    Clear and Backspace, the letter keys, and three word panels; then a
-    footer.
+    Clear and Backspace, the letter groups (see LETTER_GROUPS), and three
+    word panels; then a footer.
     """
 
     TITLE = "KEYBOARD"
@@ -538,7 +555,8 @@ class KeyboardScreen(AppScreen):
         self.composed_text = ""
         self.shift_on = True      # a message starts with a capital letter
         self.symbols_on = False   # False: letters shown; True: numbers and punctuation
-        self.char_keys = []       # the 26 character buttons, in row order
+        self.open_group = None    # None: the groups are shown; else the open group's characters
+        self.cells = []           # the 8 big buttons of the keys panel, row by row
 
         main = BoxLayout(orientation="vertical", spacing=8)
         main.add_widget(self._build_compose_row())
@@ -579,50 +597,18 @@ class KeyboardScreen(AppScreen):
         row.add_widget(actions)
         return row
 
-    def _make_char_key(self):
-        """One character key. Its character is stored on the button
-        (btn.key_value) and changes when 123 switches layouts."""
-        btn = DwellButton(font_size=28, repeatable=True,
-                          on_selected=self._on_char_key, **KEY_STYLE)
-        btn.key_value = ""
-        self.char_keys.append(btn)
-        return btn
-
     def _build_keys_panel(self):
+        """The 8 big buttons. They are created once; _refresh_keys() gives
+        each one its job (a group, a character, Space, ...) for the view
+        on display."""
         panel = Panel(bg_color=PANEL_BG, border_color=KEY_BORDER, orientation="vertical",
-                      size_hint_y=0.42, padding=8, spacing=6)
-
-        row1 = BoxLayout(spacing=6)
-        for _ in range(10):
-            row1.add_widget(self._make_char_key())
-
-        row2 = BoxLayout(spacing=6)
-        row2.add_widget(Widget(size_hint_x=0.5))  # half-key indent, as on a real keyboard
-        for _ in range(9):
-            row2.add_widget(self._make_char_key())
-        row2.add_widget(Widget(size_hint_x=0.5))
-
-        row3 = BoxLayout(spacing=6)
-        self.shift_btn = DwellButton(icon="shift", icon_layout="center", size_hint_x=1.5,
-                                     on_selected=lambda b: self._toggle_shift(), **KEY_STYLE)
-        row3.add_widget(self.shift_btn)
-        for _ in range(7):
-            row3.add_widget(self._make_char_key())
-        row3.add_widget(DwellButton(icon="erase", icon_layout="center", size_hint_x=1.5,
-                                    repeatable=True, on_selected=lambda b: self._backspace(),
-                                    **KEY_STYLE))
-
-        row4 = BoxLayout(spacing=6)
-        self.mode_btn = DwellButton(text="123", font_size=24, size_hint_x=1.5,
-                                    on_selected=lambda b: self._toggle_symbols(), **KEY_STYLE)
-        row4.add_widget(self.mode_btn)
-        row4.add_widget(DwellButton(text="Space", font_size=24, size_hint_x=7, repeatable=True,
-                                    on_selected=lambda b: self._insert_text(" "), **KEY_STYLE))
-        row4.add_widget(DwellButton(text="Enter", font_size=24, size_hint_x=1.5,
-                                    on_selected=lambda b: self._insert_text("\n"), **KEY_STYLE))
-
-        for row in (row1, row2, row3, row4):
-            panel.add_widget(row)
+                      size_hint_y=0.42, padding=8)
+        grid = GridLayout(cols=KEY_GRID_COLUMNS, spacing=8)
+        for _ in range(2 * KEY_GRID_COLUMNS):
+            btn = DwellButton(on_selected=self._on_cell, **KEY_STYLE)
+            self.cells.append(btn)
+            grid.add_widget(btn)
+        panel.add_widget(grid)
         return panel
 
     def _word_group(self, title, words, color, cols, width_share):
@@ -668,14 +654,49 @@ class KeyboardScreen(AppScreen):
         Clock.schedule_once(self._scroll_to_end, 0)
 
     def _refresh_keys(self):
-        rows = SYMBOL_ROWS if self.symbols_on else LETTER_ROWS
-        for btn, ch in zip(self.char_keys, "".join(rows)):
-            btn.key_value = ch
-            btn.text = ch
-        self.mode_btn.text = "ABC" if self.symbols_on else "123"
-        self.shift_btn.disabled = self.symbols_on  # Shift has no meaning for symbols
-        highlight = self.shift_on and not self.symbols_on
-        self.shift_btn.set_bg_color(PURPLE if highlight else KEY_FACE)
+        """Shows either the 5 groups or the characters of the open group."""
+        if self.open_group is None:
+            groups = SYMBOL_GROUPS if self.symbols_on else LETTER_GROUPS
+            for cell, group in zip(GROUP_CELLS, groups):
+                self._set_cell(cell, "group", text=" ".join(self._shown(group)), value=group)
+            self._set_cell(SPACE_CELL, "space", text="Space")
+            self._set_cell(MODE_CELL, "mode", text="ABC" if self.symbols_on else "123")
+            self._set_cell(SHIFT_CELL, "shift", icon="shift")
+        else:
+            for cell in range(len(self.cells)):
+                if cell == BACK_CELL:
+                    self._set_cell(cell, "back", text="Back", icon="arrow_left")
+                elif cell < len(self.open_group):
+                    ch = self.open_group[cell]
+                    self._set_cell(cell, "char", text=self._shown(ch), value=ch)
+                else:
+                    self._set_cell(cell, "empty")
+
+    def _shown(self, chars):
+        """Letters are shown in the case they will be typed in."""
+        return chars.upper() if self.shift_on else chars.lower()
+
+    def _set_cell(self, index, role, text="", value="", icon=None):
+        """Gives one of the 8 big buttons its job. role is "group",
+        "char", "space", "mode", "shift", "back" or "empty"."""
+        btn = self.cells[index]
+        btn.role = role
+        btn.key_value = value
+        btn.text = text
+        btn.font_size = 44 if role == "char" else 30
+        btn.icon = icon
+        btn.icon_layout = "left" if text else "center"
+        # Undo the text placement an icon may have set on this button before.
+        btn.text_size, btn.halign, btn.valign, btn.padding = (None, None), "center", "middle", [0, 0, 0, 0]
+        # If the user keeps looking at the same spot after selecting, the
+        # dwell starts again: the spot now shows something new (a group's
+        # first letter, or the groups again), so it can be selected too.
+        # Not for Back, Shift and 123, where a second selection would undo
+        # or surprise.
+        btn.repeatable = role in ("group", "char", "space")
+        btn.disabled = role == "empty" or (role == "shift" and self.symbols_on)
+        highlight = role == "shift" and self.shift_on and not self.symbols_on
+        btn.set_bg_color(PURPLE if highlight else KEY_FACE)   # also redraws the button
 
     def _after_edit(self):
         """Runs after every change to the message."""
@@ -696,8 +717,24 @@ class KeyboardScreen(AppScreen):
         )
 
     # -- actions --------------------------------------------------------------
-    def _on_char_key(self, btn):
-        ch = btn.key_value
+    def _on_cell(self, btn):
+        """Runs when one of the 8 big buttons is selected."""
+        if btn.role == "group":
+            self.open_group = btn.key_value
+        elif btn.role == "char":
+            self.open_group = None   # back to the groups for the next character
+            self._type_char(btn.key_value)
+        elif btn.role == "back":
+            self.open_group = None
+        elif btn.role == "space":
+            self._insert_text(" ")
+        elif btn.role == "mode":
+            self.symbols_on = not self.symbols_on
+        elif btn.role == "shift":
+            self.shift_on = not self.shift_on
+        self._refresh_keys()
+
+    def _type_char(self, ch):
         if ch.isalpha():
             ch = ch.upper() if self.shift_on else ch.lower()
         if ch in ATTACHING_PUNCTUATION and self.composed_text.endswith(" "):
@@ -731,17 +768,14 @@ class KeyboardScreen(AppScreen):
         self.composed_text = ""
         self._after_edit()
 
-    def _toggle_shift(self):
-        self.shift_on = not self.shift_on
-        self._refresh_keys()
-
-    def _toggle_symbols(self):
-        self.symbols_on = not self.symbols_on
-        self._refresh_keys()
-
     def _speak_text(self):
         if self.composed_text.strip():
             speak(self.composed_text)
+
+    def on_pre_enter(self, *args):
+        super().on_pre_enter(*args)
+        self.open_group = None   # always start from the groups
+        self._refresh_keys()
 
 
 # ---------------------------------------------------------------------------
@@ -890,9 +924,9 @@ class QuickFireScreen(AppScreen):
 
 
 # ---------------------------------------------------------------------------
-# 6. CALIBRATION SCREEN -- get ready, then a 9-point calibration
+# 6. CALIBRATION SCREEN -- get ready, head movement, then a 9-point calibration
 # ---------------------------------------------------------------------------
-# The screen has three stages:
+# The screen has four stages:
 #   1. READY:     a large camera preview and a Start Calibration button, so
 #                 the user can sit correctly and see their face is detected
 #                 before anything starts. The button only appears once the
@@ -900,13 +934,17 @@ class QuickFireScreen(AppScreen):
 #                 can never make calibration begin before the user is ready.
 #   2. COUNTDOWN: 3, 2, 1 after Start is pressed, so the user has time to
 #                 put their hands down and look at the screen.
-#   3. DOTS:      the red dot visits 9 points (a 3 x 3 grid) and the gaze
+#   3. HEAD:      the red dot stays in the centre while the user keeps
+#                 looking at it and moves their head (turn left/right, then
+#                 nod up/down). The eyes' target doesn't change, so the
+#                 gaze engine learns how much head movement alone changes
+#                 its readings, and removes that from then on.
+#   4. DOTS:      the red dot visits 9 points (a 3 x 3 grid) and the gaze
 #                 is measured at each one.
 #
-# Only the HORIZONTAL position is fitted for now (see gaze_engine.py), but
-# 9 points still help: each of the 3 columns is measured 3 times, at
-# different heights, so one bad reading has much less effect on the fit.
-# The same 9 points will be reused for up/down once PCCR is added.
+# Each of the 3 columns is measured 3 times and each of the 3 rows 3
+# times, so one bad reading has much less effect on the left/right and
+# up/down fits.
 
 # Where the dots appear, as fractions of the screen: (x, y), with y = 0 at
 # the BOTTOM of the screen (Kivy's convention). The order starts at the
@@ -923,6 +961,8 @@ CALIBRATION_CAPTURE_TIME = 2.0  # seconds the dot stays at each point
 CALIBRATION_SETTLE_TIME = 0.5   # first part of those seconds is ignored: the
                                 # eyes are still moving onto the new dot
 COUNTDOWN_SECONDS = 3           # 3, 2, 1 after Start is pressed
+HEAD_MOVE_TIME = 8.0            # seconds of the head-movement stage: the first
+                                # half turning left/right, the second nodding
 
 GREEN_TEXT = rgb(120, 220, 120)  # "Face detected"
 RED_TEXT = rgb(255, 120, 120)    # "Face not detected"
@@ -937,11 +977,14 @@ class CalibrationScreen(Screen):
         self.current_target_px = None  # (x, y) of the dot on display
         self.target_index = 0
         self.samples = []
-        self.stage = "ready"           # "ready", "countdown" or "dots"
+        self.stage = "ready"           # "ready", "countdown", "head" or "dots"
         self._countdown_left = 0
         self._sample_event = None
         self._preview_event = None
         self._countdown_event = None
+        self._head_event = None
+        self._head_start_event = None
+        self.head_summary = ""         # result of the head stage, shown at the end
         self._leaving = False          # True once we've decided to leave
 
         # Instructions at the top of the screen. Its height changes per
@@ -995,8 +1038,8 @@ class CalibrationScreen(Screen):
         self._place_label("top", 22, 0.2)
         self.instruction_label.text = (
             "Get ready for calibration\n"
-            "Sit about 50 cm from the screen, with your whole face in the camera view.\n"
-            "When calibration starts, keep your head still and follow the red dot with your eyes.\n"
+            "Sit about 40 cm from the camera, with your whole face in the camera view.\n"
+            "First keep looking at the red dot while you move your head; then keep your head still and follow the dot.\n"
             "Preview: green = iris, white = IR glints, yellow = pupil."
         )
         self.face_label.text = "Starting camera..."
@@ -1092,10 +1135,47 @@ class CalibrationScreen(Screen):
         self._countdown_event = None
         # Smaller text in a thin strip at the top, so it never covers a dot.
         self._place_label("top", 20, 0.1)
-        self.stage = "dots"
-        self._show_current_target()
+        self._start_head_stage()
 
-    # ---- stage 3: DOTS ---------------------------------------------------
+    # ---- stage 3: HEAD ---------------------------------------------------
+    def _start_head_stage(self):
+        self.stage = "head"
+        fx, fy = CALIBRATION_POINTS[0]   # the centre dot
+        x, y = self.width * fx, self.height * fy
+        self.dot.pos = (x - 20, y - 20)
+        self._head_start_time = time.time()
+        # Recording starts after the settle time, once the eyes are on the dot.
+        self._head_start_event = Clock.schedule_once(
+            lambda dt: self.gaze_engine.start_head_calibration(), CALIBRATION_SETTLE_TIME)
+        self._head_event = Clock.schedule_interval(self._update_head_stage, 1 / 10)
+
+    def _update_head_stage(self, dt):
+        """Runs 10 times a second during the HEAD stage: tells the user how
+        to move their head, and ends the stage when the time is up."""
+        elapsed = time.time() - self._head_start_time
+        if elapsed >= HEAD_MOVE_TIME:
+            self._stop_head_stage()
+            self.head_summary = self.gaze_engine.finish_head_calibration()
+            self.stage = "dots"
+            self._show_current_target()
+            return
+        if elapsed < HEAD_MOVE_TIME / 2:
+            movement = "slowly turn your head LEFT and RIGHT"
+        else:
+            movement = "slowly nod your head UP and DOWN"
+        self.instruction_label.text = (
+            f"Keep your eyes on the red dot and {movement}  --  "
+            f"{HEAD_MOVE_TIME - elapsed:.0f}s"
+        )
+
+    def _stop_head_stage(self):
+        for event in (self._head_event, self._head_start_event):
+            if event is not None:
+                event.cancel()
+        self._head_event = None
+        self._head_start_event = None
+
+    # ---- stage 4: DOTS ---------------------------------------------------
     def _show_current_target(self):
         # The dot's position is worked out from the screen's size NOW, not
         # when the app started: the window is still growing to full size
@@ -1156,7 +1236,7 @@ class CalibrationScreen(Screen):
         self._place_label("center", 36, 0.3)
         try:
             summary = self.gaze_engine.fit_calibration()
-            self.instruction_label.text = f"Calibration complete!\n{summary}"
+            self.instruction_label.text = f"Calibration complete!\n{summary}\n{self.head_summary}"
         except ValueError as e:
             # Not enough usable samples (e.g. face wasn't visible) --
             # fall back to mouse rather than leaving gaze half-broken.
@@ -1173,6 +1253,10 @@ class CalibrationScreen(Screen):
 
     def on_leave(self, *args):
         self._stop_preview()
+        if self.stage == "head":
+            # Left in the middle of the head stage: stop recording.
+            self._stop_head_stage()
+            self.gaze_engine.finish_head_calibration()
         if self._countdown_event is not None:
             self._countdown_event.cancel()
             self._countdown_event = None
