@@ -142,6 +142,24 @@ SMOOTHING_ALPHA = 0.25
 # the mouse, so a bad calibration can't make the pointer jump around.
 MIN_FIT_R2 = 0.6
 
+# --- Distance correction ---------------------------------------------
+# Calibration is done at one distance from the screen. If the user later
+# sits farther away, the screen looks smaller from where they are, so
+# their eyes turn less to reach its edges and the pointer would be
+# pulled toward the middle (closer: pushed outward). The face's size in
+# the picture shows the distance -- twice as far looks half as big -- so
+# the pointer's distance from the middle of the calibration dots is
+# multiplied by
+#     face size during calibration / face size now
+# which equals  distance now / distance during calibration.
+# The face size is the distance between the two OUTER eye corners
+# (stable landmarks, about 9 cm apart on an adult face). The correction
+# assumes the user faces the middle of the screen.
+FACE_SIZE_CORNERS = (33, 263)
+# The correction is kept within this range, so one bad face reading
+# can't throw the pointer across the screen.
+DISTANCE_SCALE_LIMITS = (0.7, 1.4)
+
 
 def _ensure_model_downloaded():
     if os.path.exists(MODEL_PATH):
@@ -169,6 +187,13 @@ def _compute_horizontal_feature(landmarks, w, h):
     rfx, _ = _normalized_iris_position(landmarks, RIGHT_IRIS_CENTER, RIGHT_EYE_CONTOUR, w, h)
     lfx, _ = _normalized_iris_position(landmarks, LEFT_IRIS_CENTER, LEFT_EYE_CONTOUR, w, h)
     return (rfx + lfx) / 2
+
+
+def _face_size(landmarks, w, h):
+    """Distance in pixels between the two outer eye corners: the face's
+    size in the picture, used for the distance correction."""
+    a, b = landmarks[FACE_SIZE_CORNERS[0]], landmarks[FACE_SIZE_CORNERS[1]]
+    return float(np.hypot((a.x - b.x) * w, (a.y - b.y) * h))
 
 
 def _compute_iris_height(landmarks, w, h):
@@ -518,6 +543,8 @@ class GazeEngine:
         self._smoothed_fx = None     # internal EMA state, background-thread only
         self._smoothed_vy = None
         self._smoothed_iy = None
+        self._smoothed_face_size = None
+        self._latest_face_size = None  # smoothed face size, shared with the Kivy thread
         self._missed_glint_frames = 0
         self._latest_debug_frame = None  # RGB numpy frame with dots drawn, for a live preview
         self._latest_eyes = None  # (full frame, glint/pupil points, iris centres) for close-ups
@@ -532,6 +559,14 @@ class GazeEngine:
         self._y_points = []  # (vy, iy, screen_y); vy is None if no glint was seen
         self._x_fit = None
         self._y_fit = None
+
+        # Distance correction (see the settings at the top): the face size
+        # at each calibration dot, their average once fitted, and the
+        # middle of the calibration dots on screen.
+        self._calib_face_sizes = []
+        self._calib_face_size = None
+        self._centre_x = None
+        self._centre_y = None
 
     # ---- lifecycle ---------------------------------------------------
     def start(self):
@@ -598,6 +633,7 @@ class GazeEngine:
                 self._smoothed_fx = None
                 self._smoothed_vy = None
                 self._smoothed_iy = None
+                self._smoothed_face_size = None
             else:
                 landmarks = result.face_landmarks[0]
                 fx = _compute_horizontal_feature(landmarks, sw, sh)
@@ -610,6 +646,8 @@ class GazeEngine:
 
                 self._smoothed_fx = self._smooth(self._smoothed_fx, fx)
                 self._smoothed_iy = self._smooth(self._smoothed_iy, iy)
+                self._smoothed_face_size = self._smooth(self._smoothed_face_size,
+                                                        _face_size(landmarks, sw, sh))
                 if vy is not None:
                     self._missed_glint_frames = 0
                     self._smoothed_vy = self._smooth(self._smoothed_vy, vy)
@@ -632,6 +670,7 @@ class GazeEngine:
 
             with self._lock:
                 self._latest_feature = feature
+                self._latest_face_size = self._smoothed_face_size
                 self._latest_debug_frame = debug_frame
                 self._latest_eyes = eyes
 
@@ -687,8 +726,13 @@ class GazeEngine:
 
     def add_calibration_point(self, fx, screen_x, vy=None, screen_y=None, iy=None):
         """Stores one calibration dot's measurements. vy is None when no
-        glint was seen at that dot."""
+        glint was seen at that dot. The current face size is stored too,
+        as the reference for the distance correction."""
         self._x_points.append((fx, screen_x))
+        with self._lock:
+            face_size = self._latest_face_size
+        if face_size is not None:
+            self._calib_face_sizes.append(face_size)
         if screen_y is not None and iy is not None:
             self._y_points.append((vy, iy, screen_y))
 
@@ -697,6 +741,8 @@ class GazeEngine:
         self._y_points = []
         self._x_fit = None
         self._y_fit = None
+        self._calib_face_sizes = []
+        self._calib_face_size = None
 
     def fit_calibration(self):
         """Fits screen_x = a*fx + b, and the best up/down fit (see
@@ -713,6 +759,14 @@ class GazeEngine:
         if r2_x < MIN_FIT_R2:
             raise ValueError(f"left/right fit too weak (R^2 = {r2_x:.2f})")
         self._x_fit = (a, b, r2_x)
+
+        # References for the distance correction.
+        self._centre_x = float(np.mean([p[1] for p in self._x_points]))
+        if self._y_points:
+            self._centre_y = float(np.mean([p[2] for p in self._y_points]))
+        if self._calib_face_sizes:
+            self._calib_face_size = float(np.mean(self._calib_face_sizes))
+            print(f"[Calibration] face size {self._calib_face_size:.0f} px (distance reference)")
 
         self._y_fit = self._fit_up_down()
         if self._y_fit is None:
@@ -751,6 +805,16 @@ class GazeEngine:
         print("[Calibration] up/down fits: " + ", ".join(f"{f['name']} {f['r2']:.2f}" for f in fits))
         return max(fits, key=lambda f: f["r2"])
 
+    def _distance_scale(self):
+        """distance now / distance during calibration, from the face size
+        (see the settings at the top). 1.0 if either size is unknown."""
+        with self._lock:
+            face_size = self._latest_face_size
+        if self._calib_face_size is None or not face_size:
+            return 1.0
+        low, high = DISTANCE_SCALE_LIMITS
+        return min(high, max(low, self._calib_face_size / face_size))
+
     def get_screen_x(self):
         """Returns the predicted screen X from the current gaze feature,
         or None if not calibrated or no face is currently detected."""
@@ -760,7 +824,9 @@ class GazeEngine:
         if feature is None:
             return None
         a, b, _r2 = self._x_fit
-        return a * feature[0] + b
+        x = a * feature[0] + b
+        # Distance correction: stretch or shrink around the middle.
+        return self._centre_x + (x - self._centre_x) * self._distance_scale()
 
     def get_screen_y(self):
         """Returns the predicted screen Y (Kivy: 0 = bottom) from the
@@ -780,4 +846,5 @@ class GazeEngine:
             y += self._y_fit["vy"] * vy
         if "iy" in self._y_fit:
             y += self._y_fit["iy"] * iy
-        return y
+        # Distance correction: stretch or shrink around the middle.
+        return self._centre_y + (y - self._centre_y) * self._distance_scale()
