@@ -75,3 +75,19 @@ engine exists on the Pi.
   layout once you have icon assets.
 - Real recalibration flow (the 5-point calibration + regression model
   from Figure 38).
+
+## 6. Two gaze engines side by side
+
+The repo holds two versions of the gaze tracking, and both run from the
+same folder after a `git pull`:
+
+```bash
+python main.py       # the team's version: gaze_engine.py
+python main_v2.py    # jhova's version: gaze_engine_v2.py
+```
+
+Both use the same screens, dwell buttons and calibration from `main.py`;
+only the gaze engine differs. `gaze_engine_v2.py` started as a copy of
+`gaze_engine.py` and can be changed freely. Keep its class name
+`GazeEngine` and the methods `main.py` calls (listed at the top of the
+file), and `main_v2.py` will keep working.
