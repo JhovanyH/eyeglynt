@@ -75,3 +75,17 @@ engine exists on the Pi.
   layout once you have icon assets.
 - Real recalibration flow (the 5-point calibration + regression model
   from Figure 38).
+
+## 6. Two versions side by side
+
+The repo holds two complete versions of the app, and both run from the
+same folder after a `git pull`:
+
+```bash
+python main.py       # the team's version: main.py + gaze_engine.py
+python main_v2.py    # jhova's version: main_v2.py + gaze_engine_v2.py
+```
+
+`main_v2.py` and `gaze_engine_v2.py` started as copies of `main.py` and
+`gaze_engine.py` and can be changed freely without affecting the team's
+version. `icons.py` and `assets/` are shared by both.
