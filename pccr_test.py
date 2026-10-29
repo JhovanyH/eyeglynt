@@ -67,7 +67,7 @@ def record(engine, seconds):
         feature = engine.get_latest_feature()
         if feature is not None:
             face_readings += 1
-            fx, vy, iy = feature
+            fx, vy, iy, hx = feature
             values_iy.append(iy)
             if vy is not None:
                 values_vy.append(vy)

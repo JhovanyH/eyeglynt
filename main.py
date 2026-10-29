@@ -1227,6 +1227,7 @@ class CalibrationScreen(Screen):
         self.samples = []      # fx readings (left/right) at this dot
         self.samples_vy = []   # vy readings (up/down, glints), only when a glint is seen
         self.samples_iy = []   # iy readings (up/down, iris against the eye corners)
+        self.samples_hx = []   # hx readings (left/right, glints), only when a glint is seen
         self._target_start_time = time.time()
         self._sample_event = Clock.schedule_interval(self._collect_sample, 1 / 30)
         Clock.schedule_once(self._finish_current_target, CALIBRATION_CAPTURE_TIME)
@@ -1236,11 +1237,13 @@ class CalibrationScreen(Screen):
         elapsed = time.time() - self._target_start_time
         # Ignore the first moment at each dot: the eyes are still moving there.
         if feature is not None and elapsed >= CALIBRATION_SETTLE_TIME:
-            fx, vy, iy = feature
+            fx, vy, iy, hx = feature
             self.samples.append(fx)
             self.samples_iy.append(iy)
             if vy is not None:
                 self.samples_vy.append(vy)
+            if hx is not None:
+                self.samples_hx.append(hx)
 
         remaining = max(0.0, CALIBRATION_CAPTURE_TIME - elapsed)
         point_num = self.target_index + 1
@@ -1259,13 +1262,16 @@ class CalibrationScreen(Screen):
         if self.samples:
             avg_fx = sum(self.samples) / len(self.samples)
             target_x, target_y = self.current_target_px
-            # Up/down is only recorded if a glint was seen for at least
-            # half of the readings at this dot; otherwise it's unreliable.
-            avg_vy = None
+            # The glint measurements are only recorded if a glint was seen
+            # for at least half of the readings at this dot; otherwise
+            # they're unreliable.
+            avg_vy = avg_hx = None
             if len(self.samples_vy) >= len(self.samples) / 2:
                 avg_vy = sum(self.samples_vy) / len(self.samples_vy)
+            if len(self.samples_hx) >= len(self.samples) / 2:
+                avg_hx = sum(self.samples_hx) / len(self.samples_hx)
             avg_iy = sum(self.samples_iy) / len(self.samples_iy)
-            self.gaze_engine.add_calibration_point(avg_fx, target_x, avg_vy, target_y, avg_iy)
+            self.gaze_engine.add_calibration_point(avg_fx, target_x, avg_vy, target_y, avg_iy, avg_hx)
 
         self.target_index += 1
         if self.target_index < len(CALIBRATION_POINTS):
