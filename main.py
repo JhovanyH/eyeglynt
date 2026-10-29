@@ -43,7 +43,7 @@ from kivy.uix.widget import Widget
 from kivy.core.image import Image as CoreImage
 from kivy.utils import escape_markup
 
-from gaze_engine import GazeEngine
+from gaze_engine import GazeEngine, SCREEN_PX_PER_CM
 from icons import draw_icon
 
 
@@ -1086,8 +1086,7 @@ ACCURACY_TEST_POINTS = [
     (0.25, 0.65), (0.50, 0.65), (0.75, 0.65),   # upper row, left to right
     (0.75, 0.30), (0.50, 0.30), (0.25, 0.30),   # lower row, right to left
 ]
-# The 10.1-inch 1280 x 800 screen: 1509 pixels along its 25.7 cm diagonal.
-SCREEN_PX_PER_CM = 58.8
+# Centimetres on the screen use SCREEN_PX_PER_CM, set in gaze_engine.py.
 LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
 
 GREEN_TEXT = rgb(120, 220, 120)  # "Face detected"
@@ -1322,14 +1321,16 @@ class CalibrationScreen(Screen):
             return None if value is None else round(value, digits)
 
         fx, vy, iy, hx = feature if feature is not None else (None, None, None, None)
-        head = self.gaze_engine.get_head() or (None, None, None)
+        # The head's pose (see _head_pose in gaze_engine.py), angles in degrees.
+        turn, tilt, head_x, head_y = self.gaze_engine.get_head() or (None, None, None, None)
+        turn, tilt = [None if a is None else float(np.degrees(a)) for a in (turn, tilt)]
         target_x, target_y = self.current_target_px
         self.log_rows.append([self.stage, self.target_index + 1, round(target_x), round(target_y),
                               round(elapsed, 3)]
                              + [rounded(v, 5) for v in (fx, vy, iy, hx)]
                              + [rounded(pointer[0], 1), rounded(pointer[1], 1),
                                 rounded(self.gaze_engine.get_fps(), 1)]
-                             + [rounded(v, 4) for v in head])
+                             + [rounded(v, 2) for v in (turn, tilt, head_x, head_y)])
 
     def _finish_current_target(self, dt):
         if self._sample_event is not None:
@@ -1448,7 +1449,7 @@ class CalibrationScreen(Screen):
                 writer = csv.writer(f)
                 writer.writerow(["stage", "dot", "dot_x", "dot_y", "seconds",
                                  "fx", "vy", "iy", "hx", "pointer_x", "pointer_y", "camera_fps",
-                                 "head_x", "head_y", "head_turn"])
+                                 "head_turn_deg", "head_tilt_deg", "head_x", "head_y"])
                 writer.writerows(self.log_rows)
             return f"logs/{name}"
         except OSError as e:
