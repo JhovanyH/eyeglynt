@@ -1322,12 +1322,14 @@ class CalibrationScreen(Screen):
             return None if value is None else round(value, digits)
 
         fx, vy, iy, hx = feature if feature is not None else (None, None, None, None)
+        head = self.gaze_engine.get_head() or (None, None, None)
         target_x, target_y = self.current_target_px
         self.log_rows.append([self.stage, self.target_index + 1, round(target_x), round(target_y),
                               round(elapsed, 3)]
                              + [rounded(v, 5) for v in (fx, vy, iy, hx)]
                              + [rounded(pointer[0], 1), rounded(pointer[1], 1),
-                                rounded(self.gaze_engine.get_fps(), 1)])
+                                rounded(self.gaze_engine.get_fps(), 1)]
+                             + [rounded(v, 4) for v in head])
 
     def _finish_current_target(self, dt):
         if self._sample_event is not None:
@@ -1445,7 +1447,8 @@ class CalibrationScreen(Screen):
             with open(os.path.join(LOG_DIR, name), "w", newline="") as f:
                 writer = csv.writer(f)
                 writer.writerow(["stage", "dot", "dot_x", "dot_y", "seconds",
-                                 "fx", "vy", "iy", "hx", "pointer_x", "pointer_y", "camera_fps"])
+                                 "fx", "vy", "iy", "hx", "pointer_x", "pointer_y", "camera_fps",
+                                 "head_x", "head_y", "head_turn"])
                 writer.writerows(self.log_rows)
             return f"logs/{name}"
         except OSError as e:

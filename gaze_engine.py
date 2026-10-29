@@ -204,6 +204,7 @@ MIN_FIT_R2 = 0.6
 # (stable landmarks, about 9 cm apart on an adult face). The correction
 # assumes the user faces the middle of the screen.
 FACE_SIZE_CORNERS = (33, 263)
+NOSE_TIP = 1   # landmark used for the head position (see _head_position)
 # The correction is kept within this range, so one bad face reading
 # can't throw the pointer across the screen.
 DISTANCE_SCALE_LIMITS = (0.7, 1.4)
@@ -260,6 +261,19 @@ def _compute_iris_height(landmarks, w, h):
         if eye_width > 0:
             total += (iris.y * h - corner_y) / eye_width
     return total / 2
+
+
+def _head_position(landmarks):
+    """Where the head is, for the readings log (testing): the nose tip's
+    position in the picture (0 to 1 across and down), and how far the
+    head is turned left or right: the nose tip's distance from the middle
+    of the two outer eye corners, divided by the distance between them
+    (0 = facing the camera)."""
+    nose = landmarks[NOSE_TIP]
+    a, b = landmarks[FACE_SIZE_CORNERS[0]], landmarks[FACE_SIZE_CORNERS[1]]
+    width = abs(b.x - a.x)
+    turn = (nose.x - (a.x + b.x) / 2) / width if width > 0 else 0.0
+    return nose.x, nose.y, turn
 
 
 def _crop_square(image, cx, cy, radius):
@@ -852,6 +866,7 @@ class GazeEngine:
         self._openness_history = []  # eye openness in recent frames, for the blink check
         self._closed_frames = 0      # frames in a row with the eyes nearly closed
         self._latest_face_size = None  # smoothed face size, shared with the Kivy thread
+        self._latest_head = None       # see _head_position, None if no face seen
         self._latest_debug_frame = None  # RGB numpy frame with dots drawn, for a live preview
         self._latest_eyes = None  # (full frame, glint/pupil points, iris centres) for close-ups
         self._fps = None          # pictures processed per second, measured
@@ -1004,6 +1019,7 @@ class GazeEngine:
 
             with self._lock:
                 self._latest_feature = feature
+                self._latest_head = _head_position(result.face_landmarks[0]) if result.face_landmarks else None
                 self._latest_face_size = self._face_size.value
                 self._latest_debug_frame = debug_frame
                 self._latest_eyes = eyes
@@ -1027,6 +1043,12 @@ class GazeEngine:
         None if unavailable."""
         with self._lock:
             return self._latest_debug_frame
+
+    def get_head(self):
+        """(nose x, nose y, turn), see _head_position, or None if no face
+        is currently detected. For the readings log."""
+        with self._lock:
+            return self._latest_head
 
     def get_fps(self):
         """Pictures processed per second, or None until it's measured."""
