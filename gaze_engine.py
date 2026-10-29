@@ -142,10 +142,20 @@ PUPIL_MAX_SIZE = 0.6
 PUPIL_SEARCH_SCALE = 0.9
 PUPIL_SEED_SCALE = 0.5
 GLINT_SEARCH_SCALE = 0.75
-# If a measurement is missing for this many frames in a row (about 1
-# second), it is reported as unknown instead of keeping an old value.
-# Shorter gaps, such as a blink or a glint lost for a moment, simply
-# keep the last value.
+# If a measurement is missing (a blink, a glint not found), its last
+# value is kept for a short time, then reported as unknown: the iris for
+# up to IRIS_HOLD_TIME, long enough to ride out a blink, and the glints
+# for only GLINT_HOLD_TIME. A kept glint value is out of date, and a fit
+# that uses the glints then holds the pointer partly where the eyes were
+# looking before; when the glints are lost, it is better to switch to
+# the iris backup fit quickly. (The old limit was 15 pictures: 1 second
+# at 15 pictures a second, but 2.5 seconds at the 6 pictures a second
+# measured on 30 October, when the pointer was still partly at the
+# previous dot at every accuracy-test dot.)
+IRIS_HOLD_TIME = 1.0    # seconds
+GLINT_HOLD_TIME = 0.3   # seconds
+# The remembered gap between the two glints (see _Eye) is forgotten
+# after this many pictures in a row without the pair.
 MAX_MISSED_FRAMES = 15
 
 # --- Blinks ----------------------------------------------------------
@@ -425,26 +435,28 @@ class _Smoother:
        so a single bad reading, such as a wrong glint, is ignored.
     2. Exponential moving average (SMOOTHING_ALPHA) to calm the jitter.
     3. When a reading is missing (None: no glint, or a blink), the last
-       value is kept for up to MAX_MISSED_FRAMES frames, then forgotten.
+       value is kept for up to `hold_time` seconds, then forgotten
+       (see IRIS_HOLD_TIME and GLINT_HOLD_TIME).
 
     `value` is the cleaned-up measurement, or None if there is none.
     """
 
-    def __init__(self):
+    def __init__(self, hold_time):
+        self.hold_time = hold_time
         self.reset()
 
     def reset(self):
         self.value = None
-        self._recent = []   # the last 3 readings
-        self._missed = 0    # missing readings in a row
+        self._recent = []              # the last 3 readings
+        self._last_reading_time = None
 
     def update(self, reading):
+        now = time.time()
         if reading is None:
-            self._missed += 1
-            if self._missed > MAX_MISSED_FRAMES:
+            if self._last_reading_time is not None and now - self._last_reading_time > self.hold_time:
                 self.reset()  # gone for too long: forget the old value
             return
-        self._missed = 0
+        self._last_reading_time = now
         self._recent = (self._recent + [reading])[-3:]
         spike_free = float(np.median(self._recent))
         if self.value is None:
@@ -469,8 +481,8 @@ class _Eye:
         self.iris_center = iris_center
         self.iris_edge = iris_edge
         self.corners = corners
-        self.vy = _Smoother()
-        self.hx = _Smoother()
+        self.vy = _Smoother(GLINT_HOLD_TIME)
+        self.hx = _Smoother(GLINT_HOLD_TIME)
         # Remembered about the glints (see _glint_middle):
         self.half_gap = None          # from the middle of the pair to the right-hand glint
         self.middle = None            # where the middle of the pair was last time
@@ -616,32 +628,33 @@ def _draw_dot(frame, cx, cy, radius=4, color=(0, 255, 0)):
         frame[y0:y1, x0:x1] = color
 
 
-def _fit_line(inputs, outputs):
-    """Least-squares straight line: output = a * input + b.
-    Returns (a, b, r2), where r2 (R squared) says how well the line fits:
-    1.0 = perfectly, 0 = not at all."""
-    x = np.array(inputs, dtype=float)
+def _least_squares(columns, outputs):
+    """Least-squares fit: output = c1 * column1 + c2 * column2 + ... + b.
+    Returns ([c1, c2, ...], b, r2), where r2 (R squared) says how well it
+    fits: 1.0 = perfectly, 0 = not at all."""
     y = np.array(outputs, dtype=float)
-    a_matrix = np.vstack([x, np.ones_like(x)]).T
-    a, b = np.linalg.lstsq(a_matrix, y, rcond=None)[0]
-    predicted = a * x + b
+    a_matrix = np.column_stack([np.array(column, dtype=float) for column in columns] + [np.ones_like(y)])
+    solution = np.linalg.lstsq(a_matrix, y, rcond=None)[0]
+    predicted = a_matrix @ solution
     total = np.sum((y - y.mean()) ** 2)
     r2 = 1.0 - np.sum((y - predicted) ** 2) / total if total > 0 else 0.0
-    return float(a), float(b), float(r2)
+    return [float(c) for c in solution[:-1]], float(solution[-1]), float(r2)
 
 
-def _fit_plane(inputs_a, inputs_b, outputs):
-    """Least squares with two inputs: output = a1 * input_a + a2 * input_b + b.
-    Returns (a1, a2, b, r2), with r2 as in _fit_line."""
-    p = np.array(inputs_a, dtype=float)
-    q = np.array(inputs_b, dtype=float)
-    y = np.array(outputs, dtype=float)
-    a_matrix = np.vstack([p, q, np.ones_like(p)]).T
-    a1, a2, b = np.linalg.lstsq(a_matrix, y, rcond=None)[0]
-    predicted = a1 * p + a2 * q + b
-    total = np.sum((y - y.mean()) ** 2)
-    r2 = 1.0 - np.sum((y - predicted) ** 2) / total if total > 0 else 0.0
-    return float(a1), float(a2), float(b), float(r2)
+def _left_out_error(columns, outputs):
+    """The typical error (root mean square, in screen pixels) at each
+    calibration dot when the fit is made WITHOUT that dot: how well the
+    fit predicts places it hasn't seen, as in real use. A fit with more
+    inputs always matches the dots it was made from a bit better, but
+    may predict new places worse. (The standard "leave-one-out" check.)"""
+    errors = []
+    for left_out in range(len(outputs)):
+        keep = [k for k in range(len(outputs)) if k != left_out]
+        coefs, b, _ = _least_squares([[column[k] for k in keep] for column in columns],
+                                     [outputs[k] for k in keep])
+        predicted = b + sum(c * column[left_out] for c, column in zip(coefs, columns))
+        errors.append(predicted - outputs[left_out])
+    return float(np.sqrt(np.mean(np.square(errors))))
 
 
 def _adjusted_r2(r2, points, inputs):
@@ -654,42 +667,56 @@ def _adjusted_r2(r2, points, inputs):
     return 1.0 - (1.0 - r2) * (points - 1) / (points - inputs - 1)
 
 
-def _fit_axis(points):
+def _fit_axis(points, shakes):
     """Fits one direction (left/right or up/down) from the calibration
     points, each (glint value or None, iris value, screen position).
+    `shakes` is (glint shake, iris shake): how much each measurement
+    typically wobbles while the eyes rest on a dot (standard deviation).
 
     Tries three straight-line fits -- glints only, iris only, and both
-    together -- and returns (best fit, iris-only fit). Each fit is a dict
-    with "name", the slope for each input it uses ("glint" and/or
-    "iris"), "b" and "r2" (adjusted, see _adjusted_r2), or None if that
-    fit wasn't possible (dots at fewer than 2 different positions). The
-    iris-only fit is the backup for moments when no glint is seen.
+    together -- and returns (best fit, iris-only fit). The best fit is
+    the one expected to put the pointer closest to where the user looks.
+    That expected error combines
+      - the fit's error at dots left out of it (see _left_out_error), and
+      - how much the pointer shakes with this fit: each measurement's
+        shake times the number the fit multiplies it by. A fit that
+        multiplies a shaky measurement by a big number makes a shaky
+        pointer, however well it matches the calibration dots.
+    Each fit is a dict with "name", the slope for each input it uses
+    ("glint" and/or "iris"), "b", "r2" (adjusted, see _adjusted_r2) and
+    "error" (expected error, screen pixels). A fit is None if it wasn't
+    possible (dots at fewer than 2 different positions). The iris-only
+    fit is the backup for moments when no glint is seen.
     """
-    fits = []
-    iris_fit = None
+    shake_of = {"glint": shakes[0], "iris": shakes[1]}
+    candidates = []  # (name, points used, inputs used)
     glint_points = [p for p in points if p[0] is not None]
     # The glint fits are only tried if glints were seen at 2 out of 3 dots
     # or more; fitted to fewer dots, a line can fit well just by chance.
     if (len(glint_points) >= 2 * len(points) / 3
             and len({round(screen) for g, i, screen in glint_points}) >= 2):
-        c, d, r2 = _fit_line([g for g, i, screen in glint_points],
-                             [screen for g, i, screen in glint_points])
-        fits.append({"name": "glints", "glint": c, "b": d,
-                     "r2": _adjusted_r2(r2, len(glint_points), 1)})
-        c1, c2, d, r2 = _fit_plane([g for g, i, screen in glint_points],
-                                   [i for g, i, screen in glint_points],
-                                   [screen for g, i, screen in glint_points])
-        fits.append({"name": "glints + iris", "glint": c1, "iris": c2, "b": d,
-                     "r2": _adjusted_r2(r2, len(glint_points), 2)})
+        candidates.append(("glints", glint_points, ["glint"]))
+        candidates.append(("glints + iris", glint_points, ["glint", "iris"]))
     if len({round(screen) for g, i, screen in points}) >= 2:
-        c, d, r2 = _fit_line([i for g, i, screen in points], [screen for g, i, screen in points])
-        iris_fit = {"name": "iris", "iris": c, "b": d,
-                    "r2": _adjusted_r2(r2, len(points), 1)}
-        fits.append(iris_fit)
+        candidates.append(("iris", points, ["iris"]))
+
+    fits = []
+    for name, used, inputs in candidates:
+        values = {"glint": [g for g, i, screen in used], "iris": [i for g, i, screen in used]}
+        columns = [values[k] for k in inputs]
+        screens = [screen for g, i, screen in used]
+        coefs, b, r2 = _least_squares(columns, screens)
+        fit = {"name": name, "b": b, "r2": _adjusted_r2(r2, len(used), len(inputs))}
+        fit.update(zip(inputs, coefs))
+        shake = np.sqrt(sum((fit[k] * shake_of[k]) ** 2 for k in inputs))
+        fit["error"] = float(np.hypot(_left_out_error(columns, screens), shake))
+        fits.append(fit)
     if not fits:
         return None, None
-    print("[Calibration]   fits: " + ", ".join(f"{f['name']} {f['r2']:.2f}" for f in fits))
-    return max(fits, key=lambda f: f["r2"]), iris_fit
+    print("[Calibration]   fits: " + ", ".join(
+        f"{f['name']} (R2 {f['r2']:.2f}, expected error {f['error']:.0f} px)" for f in fits))
+    iris_fit = next((f for f in fits if f["name"] == "iris"), None)
+    return min(fits, key=lambda f: f["error"]), iris_fit
 
 
 def _predict(fit, backup, glint_value, iris_value):
@@ -817,9 +844,9 @@ class GazeEngine:
         self._lock = threading.Lock()
         self._latest_feature = None  # (fx, vy, iy, hx), or None if no face seen
         # Cleaned-up measurements (see _Smoother), background-thread only.
-        self._fx = _Smoother()
-        self._iy = _Smoother()
-        self._face_size = _Smoother()
+        self._fx = _Smoother(IRIS_HOLD_TIME)
+        self._iy = _Smoother(IRIS_HOLD_TIME)
+        self._face_size = _Smoother(IRIS_HOLD_TIME)
         self._eyes = [_Eye(RIGHT_IRIS_CENTER, RIGHT_IRIS_EDGE, RIGHT_EYE_CORNERS),
                       _Eye(LEFT_IRIS_CENTER, LEFT_IRIS_EDGE, LEFT_EYE_CORNERS)]
         self._openness_history = []  # eye openness in recent frames, for the blink check
@@ -837,6 +864,7 @@ class GazeEngine:
         # direction isn't usable; the backups are the iris-only fits.
         self._x_points = []  # (hx, fx, screen_x); hx is None if no glint was seen
         self._y_points = []  # (vy, iy, screen_y); vy is None if no glint was seen
+        self._shakes = []    # (fx, vy, iy, hx) shake at each dot (see add_calibration_point)
         self._x_fit = None
         self._y_fit = None
         self._x_backup = None
@@ -897,16 +925,23 @@ class GazeEngine:
             return
 
         start_time = time.time()
+        # Frame rate, and where the time goes, measured over 5 seconds at
+        # a time and printed (seconds spent on each step, all pictures).
         fps_count, fps_start = 0, time.time()
+        spent = {"camera": 0.0, "MediaPipe": 0.0, "eyes": 0.0}
         while self._running:
+            step_start = time.time()
             frame = camera.read()  # full-size RGB picture
             if frame is None:
                 continue
-            # Frame rate: pictures processed in the last 2 seconds.
+            spent["camera"] += time.time() - step_start
             fps_count += 1
-            if time.time() - fps_start >= 2:
+            if time.time() - fps_start >= 5:
                 self._fps = fps_count / (time.time() - fps_start)
+                times = ", ".join(f"{name} {seconds / fps_count * 1000:.0f} ms" for name, seconds in spent.items())
+                print(f"[GazeEngine] {self._fps:.1f} pictures a second; per picture: {times}")
                 fps_count, fps_start = 0, time.time()
+                spent = dict.fromkeys(spent, 0.0)
             # MediaPipe gets a smaller copy (every Nth pixel). It needs a
             # contiguous array; slicing produces a view, so copy it.
             step = camera.mediapipe_step
@@ -914,7 +949,9 @@ class GazeEngine:
             sh, sw = small.shape[:2]
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=small)
             timestamp_ms = int((time.time() - start_time) * 1000)
+            step_start = time.time()
             result = landmarker.detect_for_video(mp_image, timestamp_ms)
+            spent["MediaPipe"] += time.time() - step_start
 
             debug_frame = small.copy()
             eyes = None
@@ -937,8 +974,10 @@ class GazeEngine:
                 else:
                     self._fx.update(_compute_horizontal_feature(landmarks, sw, sh))
                     self._iy.update(_compute_iris_height(landmarks, sw, sh))
+                    step_start = time.time()
                     for eye in self._eyes:
                         points += eye.measure(frame, landmarks)
+                    spent["eyes"] += time.time() - step_start
                 fh, fw = frame.shape[:2]
                 iris_centres = [(landmarks[i].x * fw, landmarks[i].y * fh)
                                 for i in (RIGHT_IRIS_CENTER, LEFT_IRIS_CENTER)]
@@ -1024,11 +1063,16 @@ class GazeEngine:
     def is_vertical_calibrated(self):
         return self._y_fit is not None
 
-    def add_calibration_point(self, fx, screen_x, vy=None, screen_y=None, iy=None, hx=None):
+    def add_calibration_point(self, fx, screen_x, vy=None, screen_y=None, iy=None, hx=None,
+                              shakes=None):
         """Stores one calibration dot's measurements. vy and hx are None
-        when no glint was seen at that dot. The current face size is
-        stored too, as the reference for the distance correction."""
+        when no glint was seen at that dot. `shakes` is how much each of
+        (fx, vy, iy, hx) wobbled at the dot (standard deviation, None if
+        unknown), used to choose the fits (see _fit_axis). The current
+        face size is stored too, as the reference for the distance
+        correction."""
         self._x_points.append((hx, fx, screen_x))
+        self._shakes.append(shakes or (None, None, None, None))
         with self._lock:
             face_size = self._latest_face_size
         if face_size is not None:
@@ -1039,6 +1083,7 @@ class GazeEngine:
     def clear_calibration(self):
         self._x_points = []
         self._y_points = []
+        self._shakes = []
         self._x_fit = None
         self._y_fit = None
         self._x_backup = None
@@ -1057,7 +1102,7 @@ class GazeEngine:
         if len(self._x_points) < 2:
             raise ValueError(f"Need at least 2 calibration points, got {len(self._x_points)}")
         print(f"[Calibration] left/right, {len(self._x_points)} points:")
-        self._x_fit, self._x_backup = _fit_axis(self._x_points)
+        self._x_fit, self._x_backup = _fit_axis(self._x_points, (self._typical_shake(3), self._typical_shake(0)))
         if self._x_fit is None:
             raise ValueError("left/right: dots seen at fewer than 2 positions")
         if self._x_fit["r2"] < MIN_FIT_R2:
@@ -1075,7 +1120,7 @@ class GazeEngine:
             print(f"[Calibration] face size {self._calib_face_size:.0f} px (distance reference)")
 
         print(f"[Calibration] up/down, {len(self._y_points)} points:")
-        self._y_fit, self._y_backup = _fit_axis(self._y_points)
+        self._y_fit, self._y_backup = _fit_axis(self._y_points, (self._typical_shake(1), self._typical_shake(2)))
         if self._y_fit is None:
             return summary + "\nUp/down: not enough data, using the mouse"
         if self._y_fit["r2"] < MIN_FIT_R2:
@@ -1083,6 +1128,12 @@ class GazeEngine:
             self._y_fit = None
             return summary + f"\nUp/down fit {weak:.2f} (too weak, using the mouse)"
         return summary + f"\nUp/down fit {self._y_fit['r2']:.2f} ({self._y_fit['name']})"
+
+    def _typical_shake(self, index):
+        """The typical (median) shake of measurement `index` of (fx, vy,
+        iy, hx) over the calibration dots, or 0 if unknown."""
+        values = [shakes[index] for shakes in self._shakes if shakes[index] is not None]
+        return float(np.median(values)) if values else 0.0
 
     def _usable_backup(self, backup):
         """The iris-only backup fit, if it is good enough to use."""
