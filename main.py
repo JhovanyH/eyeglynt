@@ -41,6 +41,7 @@ from kivy.clock import Clock
 from kivy.graphics import Color, Rectangle, Ellipse, RoundedRectangle, Line, InstructionGroup
 from kivy.uix.widget import Widget
 from kivy.core.image import Image as CoreImage
+from kivy.utils import escape_markup
 
 from gaze_engine import GazeEngine
 from icons import draw_icon
@@ -112,6 +113,12 @@ REPEAT_TIME = DWELL_TIME  # held keys repeat at the SAME rate as the initial dwe
                           # so there's only one dwell-time value to document/defend.
                           # Set this to a different (smaller) number later if you
                           # decide, with testing data, that repeats should be faster.
+
+# Calibration is least accurate at the edges of the screen, and the
+# pointer often overshoots there, past the edge. A pointer outside the
+# screen is pulled back to EDGE_INSET pixels inside it, so an overshoot
+# still lands on the button at the edge (Clear, Space, Thank you, ...).
+EDGE_INSET = 20  # pixels
 
 # For testing only: draws a small yellow circle where the app thinks the
 # person is looking, so you can see how far off the tracking is. Set it to
@@ -396,6 +403,9 @@ class GazeManager:
                 x = gaze_x  # ...and replace each direction gaze can provide
             if gaze_y is not None:
                 y = gaze_y
+        # Keep the pointer on the screen (see EDGE_INSET).
+        x = min(max(x, EDGE_INSET), Window.width - EDGE_INSET)
+        y = min(max(y, EDGE_INSET), Window.height - EDGE_INSET)
         return (x, y)
 
     def _update(self, dt):
@@ -512,7 +522,8 @@ TAB_WIDTH = 0.15        # share of the screen's width, for each tab
 
 # Quick Access replies, shown along the bottom of the keyboard. Selecting
 # one speaks it at once, without typing it, because these are answers
-# the user often needs quickly. Preliminary: to be confirmed by the
+# the user often needs quickly; it also appears in the message box, so
+# the person listening can read it too. Preliminary: to be confirmed by the
 # caregiver and therapist interviews (Data Gathering Procedure).
 QUICK_ACCESS_WORDS = [("Yes", GREEN), ("No", TILE_RED), ("Please", PINK), ("Thank you", PINK)]
 
@@ -638,7 +649,8 @@ class KeyboardScreen(AppScreen):
         # The message sits in a ScrollView: when it grows taller than the box,
         # the view scrolls to the end so the newest text is always visible.
         self.text_scroll = ScrollView(do_scroll_x=False, bar_width=4)
-        self.text_label = Label(font_size=34, halign="left", valign="top", size_hint_y=None)
+        self.text_label = Label(font_size=34, halign="left", valign="top", size_hint_y=None,
+                                markup=True)  # markup: for the coloured cursor (see _refresh_text)
         # Wrap at the box width; let the height grow with the text.
         self.text_label.bind(width=lambda w, v: setattr(w, "text_size", (v, None)))
         self.text_label.bind(texture_size=self._fit_text_height)
@@ -678,7 +690,7 @@ class KeyboardScreen(AppScreen):
         for word, color in QUICK_ACCESS_WORDS:
             btn = DwellButton(text=word, bold=True, font_size=32, bg_color=color,
                               text_color=DARK_TEXT, radius=12,
-                              on_selected=lambda b: speak(b.text))
+                              on_selected=lambda b: self.say(b.text))
             row.add_widget(btn)
         return row
 
@@ -695,10 +707,17 @@ class KeyboardScreen(AppScreen):
         self.text_scroll.scroll_y = 0 if overflowing else 1
 
     def _refresh_text(self):
-        if self.composed_text:
-            self.text_label.text = self.composed_text
+        # escape_markup: characters such as [ or & in the message are shown
+        # as they are, not read as markup.
+        if self.composed_text and self.spoken:
             # Grey after Speak: the next character starts a new message.
-            self.text_label.color = PLACEHOLDER if self.spoken else DARK_TEXT
+            self.text_label.text = escape_markup(self.composed_text)
+            self.text_label.color = PLACEHOLDER
+        elif self.composed_text:
+            # A purple bar marks where the next character goes. Without it,
+            # a Space at the end of the message can't be seen at all.
+            self.text_label.text = escape_markup(self.composed_text) + "[color=6a1fad]|[/color]"
+            self.text_label.color = DARK_TEXT
         else:
             self.text_label.text = "Type, here..."
             self.text_label.color = PLACEHOLDER
@@ -778,7 +797,9 @@ class KeyboardScreen(AppScreen):
         elif btn.role == "back":
             self.open_group = None
         elif btn.role == "space":
-            self._insert_text(" ")
+            # A message never starts with a space (nor does a new one after Speak).
+            if self.composed_text and not self.spoken:
+                self._insert_text(" ")
         elif btn.role == "mode":
             self.symbols_on = not self.symbols_on
         elif btn.role == "shift":
@@ -832,6 +853,20 @@ class KeyboardScreen(AppScreen):
             self._clear_timer.cancel()
             self._clear_timer = None
         self.clear_btn.text = "Clear"
+
+    def say(self, text):
+        """Speaks a ready-made reply (Quick Access) or Quick Fire phrase and
+        shows it in the message box, in place of the message there, as if
+        it had been typed and spoken."""
+        self._cancel_clear()
+        self.composed_text = text
+        self.spoken = True
+        self.shift_on = True   # the next message starts with a capital letter
+        self._refresh_text()
+        self._refresh_keys()
+        # Speaking holds up the screen until the voice has finished, so it
+        # starts a moment later, once the message box shows the text.
+        Clock.schedule_once(lambda dt: speak(text), 0.1)
 
     def _speak_text(self):
         if self.composed_text.strip():
@@ -939,7 +974,8 @@ class QuickFireScreen(AppScreen):
     one of the manuscript's six categories, then one of its phrases.
 
     Selecting a phrase speaks it at once, with no confirmation step, as
-    the manuscript specifies for urgent messages. The Back tile returns
+    the manuscript specifies for urgent messages. It is also shown in the
+    top bar and in the keyboard's message box. The Back tile returns
     to the categories. The top bar (see REVISED LAYOUT) says which step
     the user is on.
     """
@@ -993,7 +1029,9 @@ class QuickFireScreen(AppScreen):
         self._show_phrases(btn.key_value)
 
     def _on_phrase(self, btn):
-        speak(btn.key_value)
+        # Shown in the top bar here and in the keyboard's message box, and spoken.
+        self.step_label.text = f"Said: {btn.key_value}"
+        self.nav.sm.get_screen("keyboard").say(btn.key_value)
 
     def on_pre_enter(self, *args):
         self._show_categories()   # always start from the categories
@@ -1033,7 +1071,7 @@ CALIBRATION_SETTLE_TIME = 1.0   # first part of those seconds is ignored: the
                                 # eyes are still moving onto the new dot. Users
                                 # with motor impairments may need this time.
 COUNTDOWN_SECONDS = 3           # 3, 2, 1 after Start is pressed
-RESULT_SECONDS = 15             # how long the result stays on screen
+RESULT_SECONDS = 30             # how long the result stays on screen (to photograph it)
 
 # ACCURACY TEST (for testing, and for the results chapter). After
 # calibration, the red dot visits ACCURACY_TEST_POINTS, places between
@@ -1343,29 +1381,38 @@ class CalibrationScreen(Screen):
             self._show_result()
 
     def _finish_test(self):
-        """Works out the accuracy test's result (see RUN_ACCURACY_TEST)."""
-        offsets_x, offsets_y, shakes, missing = [], [], [], 0
-        for target_x, target_y, pointers in self.test_results:
+        """Works out the accuracy test's result (see RUN_ACCURACY_TEST): on
+        average, and for each test dot which way the pointer was off."""
+        offsets_x, offsets_y, shakes, missing, per_dot = [], [], [], 0, []
+        for (target_x, target_y, pointers), (fx, fy) in zip(self.test_results, ACCURACY_TEST_POINTS):
             seen = [(x, y) for x, y in pointers if x is not None and y is not None]
             missing += len(pointers) - len(seen)
             if not seen:
                 continue
-            xs = np.array([x for x, y in seen])
-            ys = np.array([y for x, y in seen])
+            xs = np.array([x for x, y in seen]) / SCREEN_PX_PER_CM   # in cm
+            ys = np.array([y for x, y in seen]) / SCREEN_PX_PER_CM
             # Accuracy: how far the average pointer position is from the dot.
-            offsets_x.append(abs(xs.mean() - target_x))
-            offsets_y.append(abs(ys.mean() - target_y))
+            dx = xs.mean() - target_x / SCREEN_PX_PER_CM
+            dy = ys.mean() - target_y / SCREEN_PX_PER_CM
+            offsets_x.append(abs(dx))
+            offsets_y.append(abs(dy))
             # Precision: how far the pointer strays from its own average.
-            shakes.append(np.sqrt(np.mean((xs - xs.mean()) ** 2 + (ys - ys.mean()) ** 2)))
+            shake = np.sqrt(np.mean((xs - xs.mean()) ** 2 + (ys - ys.mean()) ** 2))
+            shakes.append(shake)
+            # Kivy's y grows upwards, so a positive dy means the pointer was too high.
+            where = ("upper" if fy > 0.5 else "lower") + " " + \
+                    ("left" if fx < 0.4 else "right" if fx > 0.6 else "middle")
+            per_dot.append(f"{where}: {abs(dx):.1f} cm too far {'right' if dx > 0 else 'left'}, "
+                           f"{abs(dy):.1f} cm too {'high' if dy > 0 else 'low'}, shaking {shake:.1f} cm")
         if not shakes:
             self.summary += "\nAccuracy test: no gaze pointer (up/down or left/right uses the mouse)"
         else:
-            distance = np.mean(np.hypot(offsets_x, offsets_y)) / SCREEN_PX_PER_CM
+            distance = np.mean(np.hypot(offsets_x, offsets_y))
             self.summary += (
                 f"\nAccuracy test: {distance:.1f} cm off on average "
-                f"(left/right {np.mean(offsets_x) / SCREEN_PX_PER_CM:.1f} cm, "
-                f"up/down {np.mean(offsets_y) / SCREEN_PX_PER_CM:.1f} cm), "
-                f"shaking {np.mean(shakes) / SCREEN_PX_PER_CM:.1f} cm"
+                f"(left/right {np.mean(offsets_x):.1f} cm, "
+                f"up/down {np.mean(offsets_y):.1f} cm), "
+                f"shaking {np.mean(shakes):.1f} cm\n" + "\n".join(per_dot)
             )
             if missing:
                 self.summary += f"\n({missing} readings had no gaze pointer)"
@@ -1374,7 +1421,7 @@ class CalibrationScreen(Screen):
     def _show_result(self):
         self.dot.pos = (-100, -100)
         self.stage = "result"
-        self._place_label("center", 30, 0.5)
+        self._place_label("center", 24, 0.8)
         fps = self.gaze_engine.get_fps()
         if fps is not None:
             self.summary += f"\nCamera: {fps:.0f} pictures a second"
