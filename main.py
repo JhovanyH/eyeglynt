@@ -1355,7 +1355,12 @@ class CalibrationScreen(Screen):
             if len(self.samples_hx) >= len(self.samples) / 2:
                 avg_hx = sum(self.samples_hx) / len(self.samples_hx)
             avg_iy = sum(self.samples_iy) / len(self.samples_iy)
-            self.gaze_engine.add_calibration_point(avg_fx, target_x, avg_vy, target_y, avg_iy, avg_hx)
+            # How much each measurement wobbled at this dot (standard
+            # deviation); the gaze engine uses it to choose its fits.
+            shakes = tuple(float(np.std(values)) if len(values) >= 2 else None
+                           for values in (self.samples, self.samples_vy, self.samples_iy, self.samples_hx))
+            self.gaze_engine.add_calibration_point(avg_fx, target_x, avg_vy, target_y, avg_iy, avg_hx,
+                                                   shakes=shakes)
 
         self.target_index += 1
         if self.target_index < len(CALIBRATION_POINTS):
