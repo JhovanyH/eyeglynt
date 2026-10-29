@@ -1,22 +1,20 @@
 """
 EyeGlynt - Gaze Engine, version 2 (jhova's version)
 ===================================================
-A second gaze engine that runs alongside the team's gaze_engine.py.
-It starts as an exact copy of gaze_engine.py, so it works from day one;
-change anything inside it freely. main.py and gaze_engine.py are not
-affected by changes made here.
+The gaze engine for main_v2.py (jhova's version of the app). It
+starts as an exact copy of gaze_engine.py, so it works from day one;
+change anything inside it freely. main.py and gaze_engine.py (the
+team's version) are not affected by changes made here.
 
 RUN
 ---
-    python main.py       the team's version (gaze_engine.py)
-    python main_v2.py    this version (gaze_engine_v2.py)
+    python main.py       the team's version (main.py + gaze_engine.py)
+    python main_v2.py    this version (main_v2.py + gaze_engine_v2.py)
 
-The only rule: keep the class name GazeEngine and the methods main.py
-calls (start, stop, is_camera_ok, get_latest_feature, get_debug_frame,
-clear_calibration, add_calibration_point, fit_calibration, get_screen_x,
-get_screen_y), with the same inputs and outputs. Everything behind them
-(how the pupil and glints are found, smoothing, the calibration fit)
-can be done differently.
+main_v2.py calls start, stop, is_camera_ok, get_latest_feature,
+get_debug_frame, clear_calibration, add_calibration_point,
+fit_calibration, get_screen_x and get_screen_y. If you rename one of
+these or change what it takes or returns, update main_v2.py to match.
 
 Below is the original description of how gaze_engine.py works.
 
