@@ -106,6 +106,12 @@ REPEAT_TIME = DWELL_TIME  # held keys repeat at the SAME rate as the initial dwe
                           # Set this to a different (smaller) number later if you
                           # decide, with testing data, that repeats should be faster.
 
+# For testing only: draws a small yellow circle where the app thinks the
+# person is looking, so you can see how far off the tracking is. Set it to
+# False for the real user tests, because people tend to chase the circle
+# instead of looking at the button.
+SHOW_GAZE_POINTER = True
+
 # ---------------------------------------------------------------------------
 # 1. TEXT-TO-SPEECH
 # ---------------------------------------------------------------------------
@@ -370,6 +376,8 @@ class GazeManager:
         self.gaze_engine = gaze_engine
         self._current_target = None
         self._away_since = None  # when the pointer left the current button, or None
+        self._blocked = None     # a new button the gaze must leave before it can be used
+        self.pointer = None      # the test circle (SHOW_GAZE_POINTER), added in on_start
         Clock.schedule_interval(self._update, 1 / 30)
 
     def get_pointer_pos(self):
@@ -388,9 +396,27 @@ class GazeManager:
         if active_screen is None:
             return
         pos = self.get_pointer_pos()
+        if self.pointer is not None:
+            # Hidden during calibration, where it would distract from the dots.
+            self.pointer.move_to(pos, visible=active_screen.name != "calibration")
         buttons = [btn for btn in _find_dwell_buttons(active_screen)
                    if not btn.disabled and btn.selectable]  # greyed-out/display-only can't be selected
         current = self._current_target
+
+        # A new page has just replaced the button that was selected (for
+        # example, picking a Quick Fires category shows its phrases). The
+        # new button that now sits under the gaze is ignored until the gaze
+        # leaves it, so a phrase is never spoken just because it appeared
+        # where the person was already looking.
+        if current is not None and current not in buttons:
+            current.cancel_dwell()
+            self._current_target = current = None
+            self._away_since = None
+            self._blocked = self._button_at(buttons, pos)
+        if self._blocked is not None:
+            if self._blocked in buttons and self._is_near(self._blocked, pos, STICKY_MARGIN):
+                return
+            self._blocked = None
 
         # Sticky buttons (see STICKY_MARGIN and LEAVE_DELAY): keep dwelling
         # on the current button while the pointer is near it...
@@ -406,17 +432,20 @@ class GazeManager:
                 return
         self._away_since = None
 
-        target = None
-        for btn in buttons:
-            if self._is_near(btn, pos, 0):
-                target = btn
-                break
+        target = self._button_at(buttons, pos)
         if target is not current:
             if current is not None:
                 current.cancel_dwell()
             self._current_target = target
             if target is not None:
                 target.start_dwell()
+
+    def _button_at(self, buttons, pos):
+        """The button directly under `pos`, or None."""
+        for btn in buttons:
+            if self._is_near(btn, pos, 0):
+                return btn
+        return None
 
     @staticmethod
     def _is_near(btn, pos, margin):
@@ -425,6 +454,22 @@ class GazeManager:
         x, y = btn.to_widget(*pos)
         return (btn.x - margin <= x <= btn.right + margin
                 and btn.y - margin <= y <= btn.top + margin)
+
+
+class GazePointer(Widget):
+    """The yellow test circle (see SHOW_GAZE_POINTER)."""
+
+    RADIUS = 18  # pixels
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        with self.canvas:
+            self._color = Color(1, 0.85, 0, 1)  # yellow
+            self._circle = Line(circle=(0, 0, self.RADIUS), width=2)
+
+    def move_to(self, pos, visible=True):
+        self._color.a = 1 if visible else 0
+        self._circle.circle = (pos[0], pos[1], self.RADIUS)
 
 
 # ---------------------------------------------------------------------------
@@ -883,16 +928,31 @@ QUICKFIRE_CATEGORIES = {
         ("I want to go outside", "outside"),
     ]),
 }
-QUICKFIRE_COLUMNS = 4  # 8 phrases per category -> a 4 x 2 grid of large tiles
+# Quick Fires work in two steps, like the letter groups: first the 6
+# categories as big tiles (3 x 2), then the chosen category's 8 phrases
+# plus a Back tile (3 x 3). Every tile is then at least about 5.5 x 3.5 cm,
+# bigger than the 2-3 cm the eye tracker can be off by. (The design in
+# Figures 30-31 had a row of category tabs only about 1.4 cm tall,
+# which the eye tracker kept missing.)
+QUICKFIRE_COLUMNS = 3
+# The picture shown on each category's tile.
+CATEGORY_PICTURES = {
+    "Emergency": "help",
+    "Pain": "back_ache",
+    "Basic Needs": "hungry",
+    "Social/Emotional": "happy",
+    "People/Family": "family",
+    "Environment": "light_on",
+}
 
 
 class QuickFireScreen(AppScreen):
-    """Figures 30-31, organised into the manuscript's six category tabs.
+    """Figures 30-31, reorganised for eye tracking into two steps: pick
+    one of the manuscript's six categories, then one of its phrases.
 
-    Selecting a category tab (by dwell, like everything else) shows that
-    category's phrase tiles. Selecting a tile speaks its phrase at once,
-    with no confirmation step, as the manuscript specifies for urgent
-    messages.
+    Selecting a phrase speaks it at once, with no confirmation step, as
+    the manuscript specifies for urgent messages. The Back tile returns
+    to the categories.
     """
 
     TITLE = "QUICK FIRES"
@@ -900,63 +960,51 @@ class QuickFireScreen(AppScreen):
 
     def __init__(self, navigator, **kwargs):
         super().__init__(navigator, **kwargs)
-        self.category_names = list(QUICKFIRE_CATEGORIES)
-        self.category_grids = {}  # category -> its tile grid, built the first time it is opened
-        self.tab_buttons = {}     # category -> its tab button
+        self.current_category = None   # None: the categories are shown
+        self.tiles_panel = Panel(bg_color=PANEL_BG, border_color=KEY_BORDER, padding=10)
+        self.build_frame(self.tiles_panel)
+        self._show_categories()
+
+    def _show_categories(self):
         self.current_category = None
+        grid = GridLayout(cols=QUICKFIRE_COLUMNS, spacing=10)
+        for name, (color, _phrases) in QUICKFIRE_CATEGORIES.items():
+            tile = DwellButton(text=name, bold=True, font_size=26, bg_color=color,
+                               text_color=DARK_TEXT, radius=12,
+                               image=CATEGORY_PICTURES.get(name), icon_layout="top",
+                               on_selected=self._on_category)
+            tile.key_value = name
+            grid.add_widget(tile)
+        self._show_grid(grid)
 
-        content = BoxLayout(orientation="vertical", spacing=8)
-        content.add_widget(self._build_tab_row())
-        self.tiles_panel = Panel(bg_color=PANEL_BG, border_color=KEY_BORDER,
-                                 size_hint_y=0.88, padding=10)
-        content.add_widget(self.tiles_panel)
-        self.build_frame(content)
-
-        self._switch_category(self.category_names[0])
-
-    def _build_tab_row(self):
-        row = BoxLayout(orientation="horizontal", size_hint_y=0.12, spacing=8)
-        for name in self.category_names:
-            btn = DwellButton(text=name, bold=True, font_size=17,
-                              on_selected=self._on_tab, **{**KEY_STYLE, "radius": 10})
-            btn.key_value = name
-            self.tab_buttons[name] = btn
-            row.add_widget(btn)
-        return row
-
-    def _build_tile_grid(self, name):
+    def _show_phrases(self, name):
+        self.current_category = name
         color, phrases = QUICKFIRE_CATEGORIES[name]
         grid = GridLayout(cols=QUICKFIRE_COLUMNS, spacing=10)
         for phrase, picture in phrases:
-            tile = DwellButton(text=phrase, font_size=20, bg_color=color, text_color=DARK_TEXT,
+            tile = DwellButton(text=phrase, font_size=24, bg_color=color, text_color=DARK_TEXT,
                                radius=12, image=picture, icon_layout="top",
-                               on_selected=self._on_tile)
+                               on_selected=self._on_phrase)
             tile.key_value = phrase
             grid.add_widget(tile)
-        return grid
+        grid.add_widget(DwellButton(text="Back", bold=True, font_size=26, icon="arrow_left",
+                                    icon_layout="left", on_selected=lambda b: self._show_categories(),
+                                    **{**KEY_STYLE, "radius": 12}))
+        self._show_grid(grid)
 
-    def _on_tab(self, btn):
-        self._switch_category(btn.key_value)
+    def _show_grid(self, grid):
+        self.tiles_panel.clear_widgets()
+        self.tiles_panel.add_widget(grid)
 
-    def _on_tile(self, btn):
+    def _on_category(self, btn):
+        self._show_phrases(btn.key_value)
+
+    def _on_phrase(self, btn):
         speak(btn.key_value)
 
-    def _switch_category(self, name):
-        if name not in self.category_grids:
-            self.category_grids[name] = self._build_tile_grid(name)
-        self.tiles_panel.clear_widgets()
-        self.tiles_panel.add_widget(self.category_grids[name])
-        self.current_category = name
-
-        # The active tab takes its category's colour with a white border and,
-        # like the side tabs, is not selectable; the others stay dark.
-        for tab_name, tab in self.tab_buttons.items():
-            active = tab_name == name
-            tab.set_bg_color(QUICKFIRE_CATEGORIES[tab_name][0] if active else KEY_FACE)
-            tab.border_color = WHITE if active else KEY_BORDER
-            tab.color = DARK_TEXT if active else WHITE
-            tab.selectable = not active
-            tab._redraw()
+    def on_pre_enter(self, *args):
+        super().on_pre_enter(*args)
+        self._show_categories()   # always start from the categories
 
 
 # ---------------------------------------------------------------------------
@@ -1291,6 +1339,10 @@ class EyeGlyntApp(App):
         # Open maximized, filling the screen but keeping the title bar, so
         # the window can still be closed or moved normally.
         Window.maximize()
+        if SHOW_GAZE_POINTER:
+            # Added to the window after the screens, so it is drawn on top.
+            self.gaze_manager.pointer = GazePointer()
+            Window.add_widget(self.gaze_manager.pointer)
 
     def on_stop(self):
         self.gaze_engine.stop()
