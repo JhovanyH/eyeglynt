@@ -50,16 +50,15 @@ def rgb(r, g, b, a=1.0):
 
 # Colours sampled directly from the pixels of Figure 29.
 FRAME_BG = rgb(58, 59, 64)       # device frame and screen background
-PANEL_BG = rgb(70, 71, 80)       # keyboard and word panels
-HEADER_BG = rgb(128, 128, 128)   # top title bar and bottom footer
-PURPLE = rgb(106, 31, 173)       # KEYBOARD tab, Speak, Clear, Backspace
+PANEL_BG = rgb(70, 71, 80)       # keyboard and tile panels
+PURPLE = rgb(106, 31, 173)       # KEYBOARD tab, Speak, Backspace
 ORANGE = rgb(226, 112, 42)       # QUICK FIRES tab
 KEY_FACE = rgb(99, 98, 98)       # letter keys
 KEY_BORDER = rgb(154, 154, 154)  # thin outline around keys and panels
-PINK = rgb(226, 169, 241)        # Quick Access words
-GREEN = rgb(191, 236, 172)       # Common Words
-YELLOW = rgb(255, 235, 153)      # Phrases; Basic Needs tiles
-TILE_RED = rgb(250, 155, 155)    # Emergency tiles (Figures 30-31)
+PINK = rgb(226, 169, 241)        # Quick Access words; Environment tiles
+GREEN = rgb(191, 236, 172)       # "Yes"; Social/Emotional tiles
+YELLOW = rgb(255, 235, 153)      # Basic Needs tiles
+TILE_RED = rgb(250, 155, 155)    # "No"; Emergency tiles (Figures 30-31)
 TILE_ORANGE = rgb(252, 187, 117) # Pain tiles
 TILE_BLUE = rgb(163, 203, 250)   # People/Family tiles
 WHITE = rgb(255, 255, 255)
@@ -473,47 +472,41 @@ class GazePointer(Widget):
 
 
 # ---------------------------------------------------------------------------
-# 3b. NAVIGATION -- Home and Back buttons
+# 3b. NAVIGATION -- the KEYBOARD and QUICK FIRES tabs
 # ---------------------------------------------------------------------------
 class Navigator:
-    """Switches screens and remembers the route taken, so Back can return.
+    """Switches between the Keyboard and Quick Fires screens, for the two
+    tabs in the top bar of each screen."""
 
-    Calibration is never recorded: the app leaves it once, at start-up,
-    and Back should not send the user through calibration again.
-    """
-
-    def __init__(self, screen_manager, home="keyboard", max_history=20):
+    def __init__(self, screen_manager):
         self.sm = screen_manager
-        self.home = home
-        self.max_history = max_history
-        self.history = []
 
     def go(self, name):
-        if name == self.sm.current:
-            return
-        self.history.append(self.sm.current)
-        self.history = self.history[-self.max_history:]  # keep the list short
         self.sm.current = name
 
-    def back(self):
-        if self.history:
-            self.sm.current = self.history.pop()
-
-    def go_home(self):
-        self.go(self.home)
-
-    def can_go_back(self):
-        return bool(self.history)
-
 
 # ---------------------------------------------------------------------------
-# 4. KEYBOARD INTERFACE (Figure 29)
+# 4. KEYBOARD INTERFACE (Figure 29, revised)
 # ---------------------------------------------------------------------------
-# Word sets shown in the design. Preliminary: to be confirmed by the
+# REVISED LAYOUT (the team's suggestion, 29 October 2026). It replaces the
+# side tabs, the Home/Back title bar and the footer of Figures 29-31, so
+# the big buttons get the whole width of the screen. Both screens have
+# three bands:
+#   top bar:  the KEYBOARD and QUICK FIRES tabs, then the screen's own
+#             controls (keyboard: message box, Speak, Backspace)
+#   middle:   the screen's big buttons
+#   bottom:   (keyboard only) the Quick Access replies
+# Home and Back are gone: the two tabs reach every screen, and Quick
+# Fires has its own Back tile. Every target is now at least about
+# 3 x 3 cm, as big as the 2-3 cm accuracy of camera eye tracking allows.
+TOP_BAR_HEIGHT = 0.24   # share of the screen's height
+TAB_WIDTH = 0.15        # share of the screen's width, for each tab
+
+# Quick Access replies, shown along the bottom of the keyboard. Selecting
+# one speaks it at once, without typing it, because these are answers
+# the user often needs quickly. Preliminary: to be confirmed by the
 # caregiver and therapist interviews (Data Gathering Procedure).
-QUICK_ACCESS_WORDS = ["Yes", "No", "Please", "Thank you"]
-COMMON_WORDS = ["my", "want", "like", "go", "you", "it", "more", "stop"]
-PHRASES = ["I need help", "I'm hungry", "I'm tired", "I love you"]
+QUICK_ACCESS_WORDS = [("Yes", GREEN), ("No", TILE_RED), ("Please", PINK), ("Thank you", PINK)]
 
 # LETTER GROUPS instead of the QWERTY keys of Figure 29. A QWERTY key on
 # this screen is about 1.6 cm wide, but camera eye tracking is usually
@@ -546,89 +539,60 @@ KEY_STYLE = dict(bg_color=KEY_FACE, border_color=KEY_BORDER, text_color=WHITE, r
 
 
 class AppScreen(Screen):
-    """The frame shared by the Keyboard and Quick-Fire screens (Figures 29-31):
-    a title bar with Home and Back, the KEYBOARD and QUICK FIRES tabs on
-    the left, the screen's own content on the right, and a footer.
+    """The frame shared by the Keyboard and Quick Fires screens (see
+    REVISED LAYOUT above): a top bar with the KEYBOARD and QUICK FIRES
+    tabs followed by the screen's own controls, and the screen's content
+    below it.
 
-    Subclasses set TITLE and TAB, build their content, then call
-    build_frame(content). Keeping this in one place means both screens
-    always look and behave the same.
+    Subclasses set TAB, build their controls and content, then call
+    build_frame(controls, content). Keeping this in one place means both
+    screens always look and behave the same.
     """
 
-    TITLE = ""
-    TAB = ""  # "keyboard" or "quickfire": which side tab is this screen's own
+    TAB = ""  # "keyboard" or "quickfire": which tab is this screen's own
 
     def __init__(self, navigator, **kwargs):
         super().__init__(**kwargs)
         self.nav = navigator
 
-    def build_frame(self, content):
-        frame = Panel(bg_color=FRAME_BG, radius=0, orientation="vertical")
-        frame.add_widget(self._build_header())
-        body = BoxLayout(orientation="horizontal", padding=[10, 10, 10, 6], spacing=10)
-        body.add_widget(self._build_sidebar())
-        content.size_hint_x = 0.83
-        body.add_widget(content)
-        frame.add_widget(body)
-        frame.add_widget(self._build_footer())
+    def build_frame(self, controls, content):
+        frame = Panel(bg_color=FRAME_BG, radius=0, orientation="vertical", padding=10, spacing=10)
+        top_bar = BoxLayout(orientation="horizontal", spacing=10, size_hint_y=TOP_BAR_HEIGHT)
+        top_bar.add_widget(self._tab("KEYBOARD", "keyboard", "keyboard", PURPLE))
+        top_bar.add_widget(self._tab("QUICK FIRES", "flame", "quickfire", ORANGE))
+        controls.size_hint_x = 1 - 2 * TAB_WIDTH
+        top_bar.add_widget(controls)
+        frame.add_widget(top_bar)
+        content.size_hint_y = 1 - TOP_BAR_HEIGHT
+        frame.add_widget(content)
         self.add_widget(frame)
 
-    def _build_header(self):
-        header = Panel(bg_color=HEADER_BG, radius=0, size_hint_y=0.08,
-                       padding=[10, 6], spacing=8)
-        self.home_btn = DwellButton(icon="home", icon_layout="center", bg_color=FRAME_BG,
-                                    radius=22, size_hint_x=None, width=80,
-                                    on_selected=lambda b: self.nav.go_home())
-        self.back_btn = DwellButton(icon="arrow_left", icon_layout="center", bg_color=FRAME_BG,
-                                    radius=22, size_hint_x=None, width=80,
-                                    on_selected=lambda b: self.nav.back())
-        header.add_widget(self.home_btn)
-        header.add_widget(self.back_btn)
-        header.add_widget(Label(text=self.TITLE, bold=True, font_size=30, color=WHITE))
-        # An empty block as wide as the two buttons, so the title stays centred.
-        header.add_widget(Widget(size_hint_x=None, width=168))
-        return header
-
-    def _build_sidebar(self):
-        side = BoxLayout(orientation="vertical", size_hint_x=0.17, spacing=10)
-        on_keyboard = self.TAB == "keyboard"
-        # The tab of the screen on display gets a white border and is not
-        # selectable; the other tab switches screens.
-        side.add_widget(DwellButton(text="KEYBOARD", bold=True, font_size=20,
-                                    icon="keyboard", icon_layout="top",
-                                    bg_color=PURPLE, text_color=WHITE, radius=12,
-                                    border_color=WHITE if on_keyboard else None,
-                                    selectable=not on_keyboard, size_hint_y=0.27,
-                                    on_selected=lambda b: self.nav.go("keyboard")))
-        side.add_widget(DwellButton(text="QUICK FIRES", bold=True, font_size=20,
-                                    icon="flame", icon_layout="top",
-                                    bg_color=ORANGE, text_color=WHITE, radius=12,
-                                    border_color=None if on_keyboard else WHITE,
-                                    selectable=on_keyboard, size_hint_y=0.27,
-                                    on_selected=lambda b: self.nav.go("quickfire")))
-        side.add_widget(Widget(size_hint_y=0.46))  # empty space below the tabs
-        return side
-
-    def _build_footer(self):
-        footer = Panel(bg_color=HEADER_BG, radius=0, size_hint_y=0.04)
-        footer.add_widget(Label(text="EyeGlynt", font_size=14, color=WHITE))
-        return footer
-
-    def on_pre_enter(self, *args):
-        # Back is greyed out (and ignored by gaze) when there is nowhere to go back to.
-        self.back_btn.disabled = not self.nav.can_go_back()
+    def _tab(self, text, icon, screen_name, color):
+        """One of the two tabs. The tab of the screen on display gets a
+        white border and is not selectable; the other one switches to its
+        screen."""
+        own = screen_name == self.TAB
+        return DwellButton(text=text, bold=True, font_size=20, icon=icon, icon_layout="top",
+                           bg_color=color, text_color=WHITE, radius=12,
+                           border_color=WHITE if own else None, selectable=not own,
+                           size_hint_x=TAB_WIDTH,
+                           on_selected=lambda b: self.nav.go(screen_name))
 
 
 class KeyboardScreen(AppScreen):
-    """Figure 29: compose a message key by key or word by word, then Speak.
+    """Figure 29, revised: compose a message with the letter groups, then
+    Speak it.
 
-    Layout, top to bottom: title bar with Home and Back; a body with the
-    mode tabs on the left and, on the right, the message box with Speak,
-    Clear and Backspace, the letter groups (see LETTER_GROUPS), and three
-    word panels; then a footer.
+    Layout, top to bottom (see REVISED LAYOUT above): the tabs with the
+    message box, Speak and Backspace; the 8 big buttons of the letter
+    groups (see LETTER_GROUPS); the Quick Access replies.
+
+    There is no Clear button. After Speak, the message turns grey, and
+    the next character typed starts a new message. That saves a button,
+    and a Backspace missed by the eye tracker can never wipe out a whole
+    message.
     """
 
-    TITLE = "KEYBOARD"
     TAB = "keyboard"
 
     def __init__(self, navigator, **kwargs):
@@ -638,25 +602,26 @@ class KeyboardScreen(AppScreen):
         self.symbols_on = False   # False: letters shown; True: numbers and punctuation
         self.open_group = None    # None: the groups are shown; else the open group's characters
         self.cells = []           # the 8 big buttons of the keys panel, row by row
+        self.spoken = False       # True after Speak: the next character starts a new message
 
-        main = BoxLayout(orientation="vertical", spacing=8)
-        main.add_widget(self._build_compose_row())
-        main.add_widget(self._build_keys_panel())
-        main.add_widget(self._build_words_panel())
-        self.build_frame(main)
+        content = BoxLayout(orientation="vertical", spacing=10)
+        content.add_widget(self._build_keys_panel())
+        content.add_widget(self._build_quick_access())
+        self.build_frame(self._build_top_controls(), content)
 
         self._refresh_keys()
         self._refresh_text()
 
     # -- building the layout -------------------------------------------------
-    def _build_compose_row(self):
-        row = BoxLayout(orientation="horizontal", size_hint_y=0.22, spacing=8)
+    def _build_top_controls(self):
+        """The message box, Speak and Backspace, to the right of the tabs."""
+        row = BoxLayout(orientation="horizontal", spacing=10)
 
-        box = Panel(bg_color=WHITE, radius=12, padding=[14, 10], size_hint_x=0.74)
+        box = Panel(bg_color=WHITE, radius=12, padding=[14, 10], size_hint_x=0.54)
         # The message sits in a ScrollView: when it grows taller than the box,
         # the view scrolls to the end so the newest text is always visible.
         self.text_scroll = ScrollView(do_scroll_x=False, bar_width=4)
-        self.text_label = Label(font_size=28, halign="left", valign="top", size_hint_y=None)
+        self.text_label = Label(font_size=34, halign="left", valign="top", size_hint_y=None)
         # Wrap at the box width; let the height grow with the text.
         self.text_label.bind(width=lambda w, v: setattr(w, "text_size", (v, None)))
         self.text_label.bind(texture_size=self._fit_text_height)
@@ -664,18 +629,12 @@ class KeyboardScreen(AppScreen):
         box.add_widget(self.text_scroll)
         row.add_widget(box)
 
-        action = dict(bg_color=PURPLE, text_color=WHITE, radius=10, bold=True, font_size=16)
-        actions = GridLayout(cols=2, spacing=8, size_hint_x=0.26)
-        actions.add_widget(DwellButton(text="Speak", icon="speak", icon_layout="top",
-                                       on_selected=lambda b: self._speak_text(), **action))
-        actions.add_widget(DwellButton(text="Clear", icon="erase", icon_layout="top",
-                                       on_selected=lambda b: self._clear(), **action))
-        actions.add_widget(DwellButton(text="Backspace", icon="arrow_left", icon_layout="left",
-                                       repeatable=True,
-                                       on_selected=lambda b: self._backspace(),
-                                       **{**action, "font_size": 14}))
-        actions.add_widget(Widget())  # the design leaves this cell empty
-        row.add_widget(actions)
+        action = dict(bg_color=PURPLE, text_color=WHITE, radius=12, bold=True, font_size=20,
+                      icon_layout="top", size_hint_x=0.23)
+        row.add_widget(DwellButton(text="Speak", icon="speak",
+                                   on_selected=lambda b: self._speak_text(), **action))
+        row.add_widget(DwellButton(text="Backspace", icon="erase", repeatable=True,
+                                   on_selected=lambda b: self._backspace(), **action))
         return row
 
     def _build_keys_panel(self):
@@ -683,7 +642,7 @@ class KeyboardScreen(AppScreen):
         each one its job (a group, a character, Space, ...) for the view
         on display."""
         panel = Panel(bg_color=PANEL_BG, border_color=KEY_BORDER, orientation="vertical",
-                      size_hint_y=0.42, padding=8)
+                      size_hint_y=0.67, padding=8)
         grid = GridLayout(cols=KEY_GRID_COLUMNS, spacing=8)
         for _ in range(2 * KEY_GRID_COLUMNS):
             btn = DwellButton(on_selected=self._on_cell, **KEY_STYLE)
@@ -692,25 +651,15 @@ class KeyboardScreen(AppScreen):
         panel.add_widget(grid)
         return panel
 
-    def _word_group(self, title, words, color, cols, width_share):
-        group = BoxLayout(orientation="vertical", spacing=4, size_hint_x=width_share)
-        group.add_widget(Label(text=title, bold=True, font_size=18, color=WHITE, size_hint_y=0.2))
-        grid = GridLayout(cols=cols, spacing=6)
-        for word in words:
-            btn = DwellButton(text=word, font_size=20, bg_color=color, text_color=DARK_TEXT,
-                              radius=8, on_selected=self._on_word)
-            btn.key_value = word
-            grid.add_widget(btn)
-        group.add_widget(grid)
-        return group
-
-    def _build_words_panel(self):
-        panel = Panel(bg_color=FRAME_BG, border_color=KEY_BORDER, orientation="horizontal",
-                      size_hint_y=0.36, padding=8, spacing=14)
-        panel.add_widget(self._word_group("Quick Access", QUICK_ACCESS_WORDS, PINK, 2, 0.24))
-        panel.add_widget(self._word_group("Common Words", COMMON_WORDS, GREEN, 4, 0.45))
-        panel.add_widget(self._word_group("Phrases", PHRASES, YELLOW, 2, 0.31))
-        return panel
+    def _build_quick_access(self):
+        """The Quick Access replies along the bottom (QUICK_ACCESS_WORDS)."""
+        row = GridLayout(cols=len(QUICK_ACCESS_WORDS), spacing=10, size_hint_y=0.33)
+        for word, color in QUICK_ACCESS_WORDS:
+            btn = DwellButton(text=word, bold=True, font_size=32, bg_color=color,
+                              text_color=DARK_TEXT, radius=12,
+                              on_selected=lambda b: speak(b.text))
+            row.add_widget(btn)
+        return row
 
     # -- refreshing what is shown ---------------------------------------------
     def _fit_text_height(self, *args):
@@ -727,7 +676,8 @@ class KeyboardScreen(AppScreen):
     def _refresh_text(self):
         if self.composed_text:
             self.text_label.text = self.composed_text
-            self.text_label.color = DARK_TEXT
+            # Grey after Speak: the next character starts a new message.
+            self.text_label.color = PLACEHOLDER if self.spoken else DARK_TEXT
         else:
             self.text_label.text = "Type, here..."
             self.text_label.color = PLACEHOLDER
@@ -815,46 +765,44 @@ class KeyboardScreen(AppScreen):
             self.shift_on = not self.shift_on
         self._refresh_keys()
 
+    def _start_new_if_spoken(self):
+        """After Speak, the first new character starts a new message."""
+        if self.spoken:
+            self.composed_text = ""
+            self.spoken = False
+
     def _type_char(self, ch):
+        self._start_new_if_spoken()
         if ch.isalpha():
             ch = ch.upper() if self.shift_on else ch.lower()
         if ch in ATTACHING_PUNCTUATION and self.composed_text.endswith(" "):
-            # A word button leaves a trailing space. Pull the punctuation back
-            # onto that word ("more ." becomes "more. ") and keep a space after
-            # it, so the user doesn't spend a Backspace and a Space on it.
+            # Punctuation typed after a Space belongs to the word before it:
+            # "more ." becomes "more. ", keeping a space after it, so the user
+            # doesn't spend a Backspace and a Space on it.
             self.composed_text = self.composed_text[:-1] + ch + " "
             self._after_edit()
             return
         self._insert_text(ch)
 
-    def _on_word(self, btn):
-        """Inserts a whole word or phrase, adding spaces around it as needed."""
-        word = btn.key_value
-        if self.shift_on:
-            word = word[:1].upper() + word[1:]
-        if self.composed_text and not self.composed_text.endswith((" ", "\n")):
-            self.composed_text += " "
-        self.composed_text += word + " "
-        self._after_edit()
-
     def _insert_text(self, text):
+        self._start_new_if_spoken()
         self.composed_text += text
         self._after_edit()
 
     def _backspace(self):
+        self.spoken = False   # Backspace after Speak edits the spoken message
         self.composed_text = self.composed_text[:-1]
-        self._after_edit()
-
-    def _clear(self):
-        self.composed_text = ""
         self._after_edit()
 
     def _speak_text(self):
         if self.composed_text.strip():
             speak(self.composed_text)
+            self.spoken = True
+            self.shift_on = True   # the next message starts with a capital letter
+            self._refresh_text()
+            self._refresh_keys()
 
     def on_pre_enter(self, *args):
-        super().on_pre_enter(*args)
         self.open_group = None   # always start from the groups
         self._refresh_keys()
 
@@ -952,21 +900,25 @@ class QuickFireScreen(AppScreen):
 
     Selecting a phrase speaks it at once, with no confirmation step, as
     the manuscript specifies for urgent messages. The Back tile returns
-    to the categories.
+    to the categories. The top bar (see REVISED LAYOUT) says which step
+    the user is on.
     """
 
-    TITLE = "QUICK FIRES"
     TAB = "quickfire"
 
     def __init__(self, navigator, **kwargs):
         super().__init__(navigator, **kwargs)
         self.current_category = None   # None: the categories are shown
+        self.step_label = Label(bold=True, font_size=30, color=WHITE)
+        step_box = Panel(bg_color=PANEL_BG, border_color=KEY_BORDER, radius=12)
+        step_box.add_widget(self.step_label)
         self.tiles_panel = Panel(bg_color=PANEL_BG, border_color=KEY_BORDER, padding=10)
-        self.build_frame(self.tiles_panel)
+        self.build_frame(step_box, self.tiles_panel)
         self._show_categories()
 
     def _show_categories(self):
         self.current_category = None
+        self.step_label.text = "Pick a category"
         grid = GridLayout(cols=QUICKFIRE_COLUMNS, spacing=10)
         for name, (color, _phrases) in QUICKFIRE_CATEGORIES.items():
             tile = DwellButton(text=name, bold=True, font_size=26, bg_color=color,
@@ -979,6 +931,7 @@ class QuickFireScreen(AppScreen):
 
     def _show_phrases(self, name):
         self.current_category = name
+        self.step_label.text = f"{name}: pick a phrase"
         color, phrases = QUICKFIRE_CATEGORIES[name]
         grid = GridLayout(cols=QUICKFIRE_COLUMNS, spacing=10)
         for phrase, picture in phrases:
@@ -1003,7 +956,6 @@ class QuickFireScreen(AppScreen):
         speak(btn.key_value)
 
     def on_pre_enter(self, *args):
-        super().on_pre_enter(*args)
         self._show_categories()   # always start from the categories
 
 
@@ -1227,6 +1179,7 @@ class CalibrationScreen(Screen):
         self.samples = []      # fx readings (left/right) at this dot
         self.samples_vy = []   # vy readings (up/down, glints), only when a glint is seen
         self.samples_iy = []   # iy readings (up/down, iris against the eye corners)
+        self.samples_hx = []   # hx readings (left/right, glints), only when a glint is seen
         self._target_start_time = time.time()
         self._sample_event = Clock.schedule_interval(self._collect_sample, 1 / 30)
         Clock.schedule_once(self._finish_current_target, CALIBRATION_CAPTURE_TIME)
@@ -1236,11 +1189,13 @@ class CalibrationScreen(Screen):
         elapsed = time.time() - self._target_start_time
         # Ignore the first moment at each dot: the eyes are still moving there.
         if feature is not None and elapsed >= CALIBRATION_SETTLE_TIME:
-            fx, vy, iy = feature
+            fx, vy, iy, hx = feature
             self.samples.append(fx)
             self.samples_iy.append(iy)
             if vy is not None:
                 self.samples_vy.append(vy)
+            if hx is not None:
+                self.samples_hx.append(hx)
 
         remaining = max(0.0, CALIBRATION_CAPTURE_TIME - elapsed)
         point_num = self.target_index + 1
@@ -1259,13 +1214,16 @@ class CalibrationScreen(Screen):
         if self.samples:
             avg_fx = sum(self.samples) / len(self.samples)
             target_x, target_y = self.current_target_px
-            # Up/down is only recorded if a glint was seen for at least
-            # half of the readings at this dot; otherwise it's unreliable.
-            avg_vy = None
+            # The glint measurements are only recorded if a glint was seen
+            # for at least half of the readings at this dot; otherwise
+            # they're unreliable.
+            avg_vy = avg_hx = None
             if len(self.samples_vy) >= len(self.samples) / 2:
                 avg_vy = sum(self.samples_vy) / len(self.samples_vy)
+            if len(self.samples_hx) >= len(self.samples) / 2:
+                avg_hx = sum(self.samples_hx) / len(self.samples_hx)
             avg_iy = sum(self.samples_iy) / len(self.samples_iy)
-            self.gaze_engine.add_calibration_point(avg_fx, target_x, avg_vy, target_y, avg_iy)
+            self.gaze_engine.add_calibration_point(avg_fx, target_x, avg_vy, target_y, avg_iy, avg_hx)
 
         self.target_index += 1
         if self.target_index < len(CALIBRATION_POINTS):
@@ -1317,7 +1275,7 @@ class EyeGlyntApp(App):
         self.gaze_engine.start()
 
         sm = ScreenManager()
-        self.navigator = Navigator(sm, home="keyboard")
+        self.navigator = Navigator(sm)
         sm.add_widget(KeyboardScreen(self.navigator, name="keyboard"))
         sm.add_widget(QuickFireScreen(self.navigator, name="quickfire"))
         sm.add_widget(
