@@ -154,9 +154,13 @@ MAX_MISSED_FRAMES = 15
 # the eye's openness (gap between the eyelids / eye width) is compared
 # with its usual openness (the median of the last OPENNESS_HISTORY
 # frames, about 2 seconds); below BLINK_OPENNESS of that, the frame is a
-# blink and the last measurements are kept. Looking down narrows the
-# eye a little, but nowhere near half.
-BLINK_OPENNESS = 0.5
+# blink and the last measurements are kept. Looking down at the bottom
+# of the screen also narrows the eyes, so a blink must be a deep closing
+# (BLINK_OPENNESS), and short: a blink lasts at most about 0.4 seconds
+# (BLINK_MAX_FRAMES), so eyes that stay narrow longer than that are
+# looking down, and are measured as usual.
+BLINK_OPENNESS = 0.35
+BLINK_MAX_FRAMES = 5
 OPENNESS_HISTORY = 30
 
 # Exponential-moving-average smoothing applied to the raw gaze feature
@@ -553,11 +557,13 @@ class _Eye:
                 middle = min(glints, key=lambda g: np.hypot(g[0] - pupil[0], g[1] - pupil[1]))
             else:
                 # Each glint is either the left one of the pair (the middle
-                # is half a gap to its right) or the right one (half a gap
-                # to its left). Use the guess nearest to the last middle.
+                # is half a gap to its right), the right one (half a gap
+                # to its left), or both glints merged into one spot (the
+                # middle is the spot itself). Use the guess nearest to the
+                # last middle.
                 dx, dy = self.half_gap
                 guesses = [(gx + dx, gy + dy) for gx, gy in glints] + \
-                          [(gx - dx, gy - dy) for gx, gy in glints]
+                          [(gx - dx, gy - dy) for gx, gy in glints] + list(glints)
                 last_x, last_y = self.middle
                 middle = min(guesses, key=lambda m: np.hypot(m[0] - last_x, m[1] - last_y))
                 if np.hypot(middle[0] - last_x, middle[1] - last_y) > GLINT_JUMP_LIMIT * iris_radius:
@@ -817,6 +823,7 @@ class GazeEngine:
         self._eyes = [_Eye(RIGHT_IRIS_CENTER, RIGHT_IRIS_EDGE, RIGHT_EYE_CORNERS),
                       _Eye(LEFT_IRIS_CENTER, LEFT_IRIS_EDGE, LEFT_EYE_CORNERS)]
         self._openness_history = []  # eye openness in recent frames, for the blink check
+        self._closed_frames = 0      # frames in a row with the eyes nearly closed
         self._latest_face_size = None  # smoothed face size, shared with the Kivy thread
         self._latest_debug_frame = None  # RGB numpy frame with dots drawn, for a live preview
         self._latest_eyes = None  # (full frame, glint/pupil points, iris centres) for close-ups
@@ -854,11 +861,13 @@ class GazeEngine:
         self._running = False
 
     def _is_blink(self, landmarks, w, h):
-        """True if the eyes are much less open than usual (see the blink
-        settings at the top)."""
+        """True if the eyes are much less open than usual, for no longer
+        than a blink lasts (see the blink settings at the top)."""
         openness = _eye_openness(landmarks, w, h)
         self._openness_history = (self._openness_history + [openness])[-OPENNESS_HISTORY:]
-        return openness < BLINK_OPENNESS * float(np.median(self._openness_history))
+        nearly_closed = openness < BLINK_OPENNESS * float(np.median(self._openness_history))
+        self._closed_frames = self._closed_frames + 1 if nearly_closed else 0
+        return 0 < self._closed_frames <= BLINK_MAX_FRAMES
 
     def _run_loop(self):
         try:

@@ -508,6 +508,12 @@ TAB_WIDTH = 0.15        # share of the screen's width, for each tab
 # caregiver and therapist interviews (Data Gathering Procedure).
 QUICK_ACCESS_WORDS = [("Yes", GREEN), ("No", TILE_RED), ("Please", PINK), ("Thank you", PINK)]
 
+# Clear erases the whole message, so it needs two selections in a row:
+# the first turns it into "Clear?", and only a second one (keep looking
+# at it) erases. If the second doesn't come within CLEAR_CONFIRM_TIME
+# seconds, it turns back into "Clear". A glance can't erase a message.
+CLEAR_CONFIRM_TIME = 4.0
+
 # LETTER GROUPS instead of the QWERTY keys of Figure 29. A QWERTY key on
 # this screen is about 1.6 cm wide, but camera eye tracking is usually
 # off by 2 to 3 cm, so single keys were missed. Instead, the keys panel
@@ -587,10 +593,10 @@ class KeyboardScreen(AppScreen):
     message box, Speak and Backspace; the 8 big buttons of the letter
     groups (see LETTER_GROUPS); the Quick Access replies.
 
-    There is no Clear button. After Speak, the message turns grey, and
-    the next character typed starts a new message. That saves a button,
-    and a Backspace missed by the eye tracker can never wipe out a whole
-    message.
+    After Speak, the message turns grey, and the next character typed
+    starts a new message, so Clear isn't needed between messages. Clear
+    (top right) is for starting over before speaking; it asks for a
+    second look first (see CLEAR_CONFIRM_TIME).
     """
 
     TAB = "keyboard"
@@ -603,6 +609,7 @@ class KeyboardScreen(AppScreen):
         self.open_group = None    # None: the groups are shown; else the open group's characters
         self.cells = []           # the 8 big buttons of the keys panel, row by row
         self.spoken = False       # True after Speak: the next character starts a new message
+        self._clear_timer = None  # set while Clear waits for its second selection
 
         content = BoxLayout(orientation="vertical", spacing=10)
         content.add_widget(self._build_keys_panel())
@@ -614,10 +621,10 @@ class KeyboardScreen(AppScreen):
 
     # -- building the layout -------------------------------------------------
     def _build_top_controls(self):
-        """The message box, Speak and Backspace, to the right of the tabs."""
+        """The message box, Speak, Backspace and Clear, to the right of the tabs."""
         row = BoxLayout(orientation="horizontal", spacing=10)
 
-        box = Panel(bg_color=WHITE, radius=12, padding=[14, 10], size_hint_x=0.54)
+        box = Panel(bg_color=WHITE, radius=12, padding=[14, 10], size_hint_x=0.4)
         # The message sits in a ScrollView: when it grows taller than the box,
         # the view scrolls to the end so the newest text is always visible.
         self.text_scroll = ScrollView(do_scroll_x=False, bar_width=4)
@@ -630,11 +637,15 @@ class KeyboardScreen(AppScreen):
         row.add_widget(box)
 
         action = dict(bg_color=PURPLE, text_color=WHITE, radius=12, bold=True, font_size=20,
-                      icon_layout="top", size_hint_x=0.23)
+                      icon_layout="top", size_hint_x=0.2)
         row.add_widget(DwellButton(text="Speak", icon="speak",
                                    on_selected=lambda b: self._speak_text(), **action))
         row.add_widget(DwellButton(text="Backspace", icon="erase", repeatable=True,
                                    on_selected=lambda b: self._backspace(), **action))
+        # Repeatable, so that simply keeping the eyes on it gives the second selection.
+        self.clear_btn = DwellButton(text="Clear", repeatable=True, on_selected=self._on_clear,
+                                     **{**action, "font_size": 26})
+        row.add_widget(self.clear_btn)
         return row
 
     def _build_keys_panel(self):
@@ -794,6 +805,25 @@ class KeyboardScreen(AppScreen):
         self.composed_text = self.composed_text[:-1]
         self._after_edit()
 
+    def _on_clear(self, btn):
+        """First selection: ask (see CLEAR_CONFIRM_TIME). Second: erase."""
+        if self._clear_timer is None:
+            btn.text = "Clear?"
+            self._clear_timer = Clock.schedule_once(lambda dt: self._cancel_clear(),
+                                                    CLEAR_CONFIRM_TIME)
+            return
+        self._cancel_clear()
+        self.composed_text = ""
+        self.spoken = False
+        self._after_edit()
+
+    def _cancel_clear(self):
+        """Clear goes back to waiting for a first selection."""
+        if self._clear_timer is not None:
+            self._clear_timer.cancel()
+            self._clear_timer = None
+        self.clear_btn.text = "Clear"
+
     def _speak_text(self):
         if self.composed_text.strip():
             speak(self.composed_text)
@@ -804,6 +834,7 @@ class KeyboardScreen(AppScreen):
 
     def on_pre_enter(self, *args):
         self.open_group = None   # always start from the groups
+        self._cancel_clear()
         self._refresh_keys()
 
 
