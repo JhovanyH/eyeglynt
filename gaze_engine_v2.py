@@ -846,6 +846,7 @@ class GazeEngine:
         self._latest_face_size = None  # smoothed face size, shared with the Kivy thread
         self._latest_debug_frame = None  # RGB numpy frame with dots drawn, for a live preview
         self._latest_eyes = None  # (full frame, glint/pupil points, iris centres) for close-ups
+        self._fps = None          # pictures processed per second, measured
         self._running = False
         self._thread = None
         self._camera_ok = True  # flips False if the camera can't be opened
@@ -915,10 +916,16 @@ class GazeEngine:
             return
 
         start_time = time.time()
+        fps_count, fps_start = 0, time.time()
         while self._running:
             frame = camera.read()  # full-size RGB picture
             if frame is None:
                 continue
+            # Frame rate: pictures processed in the last 2 seconds.
+            fps_count += 1
+            if time.time() - fps_start >= 2:
+                self._fps = fps_count / (time.time() - fps_start)
+                fps_count, fps_start = 0, time.time()
             # MediaPipe gets a smaller copy (every Nth pixel). It needs a
             # contiguous array; slicing produces a view, so copy it.
             step = camera.mediapipe_step
@@ -1000,6 +1007,10 @@ class GazeEngine:
         None if unavailable."""
         with self._lock:
             return self._latest_debug_frame
+
+    def get_fps(self):
+        """Pictures processed per second, or None until it's measured."""
+        return self._fps
 
     def get_eye_closeup(self, half_size=40, zoom=4):
         """Returns a picture of both eyes side by side, enlarged `zoom`
