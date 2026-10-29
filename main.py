@@ -90,7 +90,11 @@ def _load_symbol(name):
 SCREEN_W, SCREEN_H = 1280, 800
 Window.size = (SCREEN_W, SCREEN_H)
 
-DWELL_TIME = 1.5  # seconds -- matches the 1.5s example in your flowchart section
+# Dwell time: how long the pointer must stay on a button to select it.
+# 2.0 seconds instead of the flowchart's 1.5-second example: in testing
+# (29 October), 1.5 s was too quick. With the pointer still 1 to 3 cm
+# off, keys were selected before the user could settle on the right one.
+DWELL_TIME = 2.0  # seconds
 
 # Gaze is never perfectly steady: the pointer jitters by a few millimetres
 # even when the eyes are still, and a blink can throw it off for a moment.
@@ -730,12 +734,11 @@ class KeyboardScreen(AppScreen):
         btn.icon_layout = "left" if text else "center"
         # Undo the text placement an icon may have set on this button before.
         btn.text_size, btn.halign, btn.valign, btn.padding = (None, None), "center", "middle", [0, 0, 0, 0]
-        # If the user keeps looking at the same spot after selecting, the
-        # dwell starts again: the spot now shows something new (a group's
-        # first letter, or the groups again), so it can be selected too.
-        # Not for Back, Shift and 123, where a second selection would undo
-        # or surprise.
-        btn.repeatable = role in ("group", "char", "space")
+        # No key selects again while the eyes stay on it: after a selection,
+        # the eyes must leave the key and come back. Otherwise, opening a
+        # group and then pausing to find the letter would type whatever
+        # letter appeared under the eyes.
+        btn.repeatable = False
         btn.disabled = role == "empty" or (role == "shift" and self.symbols_on)
         highlight = role == "shift" and self.shift_on and not self.symbols_on
         btn.set_bg_color(PURPLE if highlight else KEY_FACE)   # also redraws the button
