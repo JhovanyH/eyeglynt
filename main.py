@@ -19,8 +19,11 @@ RUN
                          started from the Pi's own screen)
 """
 
+import csv
 import os
 import time
+
+import numpy as np
 
 import pyttsx3
 from kivy.app import App
@@ -91,10 +94,11 @@ SCREEN_W, SCREEN_H = 1280, 800
 Window.size = (SCREEN_W, SCREEN_H)
 
 # Dwell time: how long the pointer must stay on a button to select it.
-# 2.0 seconds instead of the flowchart's 1.5-second example: in testing
-# (29 October), 1.5 s was too quick. With the pointer still 1 to 3 cm
-# off, keys were selected before the user could settle on the right one.
-DWELL_TIME = 2.0  # seconds
+# 4.0 seconds instead of the flowchart's 1.5-second example: in testing
+# (29 October), 1.5 s and then 2 s were too quick. With the pointer
+# still off by a few centimetres, keys were selected before the user
+# could settle on the right one.
+DWELL_TIME = 4.0  # seconds
 
 # Gaze is never perfectly steady: the pointer jitters by a few millimetres
 # even when the eyes are still, and a blink can throw it off for a moment.
@@ -516,7 +520,9 @@ QUICK_ACCESS_WORDS = [("Yes", GREEN), ("No", TILE_RED), ("Please", PINK), ("Than
 # the first turns it into "Clear?", and only a second one (keep looking
 # at it) erases. If the second doesn't come within CLEAR_CONFIRM_TIME
 # seconds, it turns back into "Clear". A glance can't erase a message.
-CLEAR_CONFIRM_TIME = 4.0
+# The second selection takes REPEAT_TIME, so the wait is always 2
+# seconds longer than that, whatever the dwell time is set to.
+CLEAR_CONFIRM_TIME = REPEAT_TIME + 2.0
 
 # LETTER GROUPS instead of the QWERTY keys of Figure 29. A QWERTY key on
 # this screen is about 1.6 cm wide, but camera eye tracking is usually
@@ -996,7 +1002,7 @@ class QuickFireScreen(AppScreen):
 # ---------------------------------------------------------------------------
 # 6. CALIBRATION SCREEN -- get ready, then a 9-point calibration
 # ---------------------------------------------------------------------------
-# The screen has three stages:
+# The screen has three stages (and the accuracy test, see below):
 #   1. READY:     a large camera preview and a Start Calibration button, so
 #                 the user can sit correctly and see their face is detected
 #                 before anything starts. The button only appears once the
@@ -1027,7 +1033,24 @@ CALIBRATION_SETTLE_TIME = 1.0   # first part of those seconds is ignored: the
                                 # eyes are still moving onto the new dot. Users
                                 # with motor impairments may need this time.
 COUNTDOWN_SECONDS = 3           # 3, 2, 1 after Start is pressed
-RESULT_SECONDS = 10             # how long the result stays on screen
+RESULT_SECONDS = 15             # how long the result stays on screen
+
+# ACCURACY TEST (for testing, and for the results chapter). After
+# calibration, the red dot visits ACCURACY_TEST_POINTS, places between
+# the calibration dots, and the app measures where the gaze pointer
+# lands: how far from the dot on average (accuracy) and how much it
+# shakes (precision), in centimetres on the screen. Every reading, from
+# calibration and from the test, is saved to a CSV file in the "logs"
+# folder, so the real measurements can be analysed later. Set
+# RUN_ACCURACY_TEST to False for the real user sessions.
+RUN_ACCURACY_TEST = True
+ACCURACY_TEST_POINTS = [
+    (0.25, 0.65), (0.50, 0.65), (0.75, 0.65),   # upper row, left to right
+    (0.75, 0.30), (0.50, 0.30), (0.25, 0.30),   # lower row, right to left
+]
+# The 10.1-inch 1280 x 800 screen: 1509 pixels along its 25.7 cm diagonal.
+SCREEN_PX_PER_CM = 58.8
+LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
 
 GREEN_TEXT = rgb(120, 220, 120)  # "Face detected"
 RED_TEXT = rgb(255, 120, 120)    # "Face not detected"
@@ -1042,7 +1065,10 @@ class CalibrationScreen(Screen):
         self.current_target_px = None  # (x, y) of the dot on display
         self.target_index = 0
         self.samples = []
-        self.stage = "ready"           # "ready", "countdown" or "dots"
+        self.stage = "ready"           # "ready", "countdown", "dots" or "test"
+        self.summary = ""              # the calibration result, shown at the end
+        self.log_rows = []             # every reading, saved to a CSV file at the end
+        self.test_results = []         # per test dot: (target x, target y, pointer positions)
         self._countdown_left = 0
         self._sample_event = None
         self._preview_event = None
@@ -1093,6 +1119,8 @@ class CalibrationScreen(Screen):
     # ---- stage 1: READY ------------------------------------------------
     def on_pre_enter(self, *args):
         self.target_index = 0
+        self.log_rows = []
+        self.test_results = []
         self.gaze_engine.clear_calibration()
         self.stage = "ready"
         self._leaving = False
@@ -1200,13 +1228,16 @@ class CalibrationScreen(Screen):
         self.stage = "dots"
         self._show_current_target()
 
-    # ---- stage 3: DOTS ---------------------------------------------------
+    # ---- stage 3: DOTS (and the accuracy test) --------------------------
+    def _points(self):
+        return ACCURACY_TEST_POINTS if self.stage == "test" else CALIBRATION_POINTS
+
     def _show_current_target(self):
         # The dot's position is worked out from the screen's size NOW, not
         # when the app started: the window is still growing to full size
         # (maximizing) at start-up, and using that early, smaller size put
         # every dot in the left part of the screen.
-        fx, fy = CALIBRATION_POINTS[self.target_index]
+        fx, fy = self._points()[self.target_index]
         x, y = self.width * fx, self.height * fy
         self.current_target_px = (x, y)
         self.dot.pos = (x - 20, y - 20)
@@ -1214,6 +1245,7 @@ class CalibrationScreen(Screen):
         self.samples_vy = []   # vy readings (up/down, glints), only when a glint is seen
         self.samples_iy = []   # iy readings (up/down, iris against the eye corners)
         self.samples_hx = []   # hx readings (left/right, glints), only when a glint is seen
+        self.pointer_samples = []  # accuracy test: where the gaze pointer was
         self._target_start_time = time.time()
         self._sample_event = Clock.schedule_interval(self._collect_sample, 1 / 30)
         Clock.schedule_once(self._finish_current_target, CALIBRATION_CAPTURE_TIME)
@@ -1221,8 +1253,13 @@ class CalibrationScreen(Screen):
     def _collect_sample(self, dt):
         feature = self.gaze_engine.get_latest_feature()
         elapsed = time.time() - self._target_start_time
+        pointer = (self.gaze_engine.get_screen_x(), self.gaze_engine.get_screen_y())
+        self._log(elapsed, feature, pointer)
+        if self.stage == "test":
+            if elapsed >= CALIBRATION_SETTLE_TIME:
+                self.pointer_samples.append(pointer)
         # Ignore the first moment at each dot: the eyes are still moving there.
-        if feature is not None and elapsed >= CALIBRATION_SETTLE_TIME:
+        elif feature is not None and elapsed >= CALIBRATION_SETTLE_TIME:
             fx, vy, iy, hx = feature
             self.samples.append(fx)
             self.samples_iy.append(iy)
@@ -1233,17 +1270,40 @@ class CalibrationScreen(Screen):
 
         remaining = max(0.0, CALIBRATION_CAPTURE_TIME - elapsed)
         point_num = self.target_index + 1
-        total_points = len(CALIBRATION_POINTS)
+        total_points = len(self._points())
         face_status = "face detected" if feature is not None else "FACE NOT DETECTED -- move into camera view"
+        what = "Accuracy test: look" if self.stage == "test" else "Look"
         self.instruction_label.text = (
-            f"Look at the red dot  ({point_num} of {total_points})  --  "
+            f"{what} at the red dot  ({point_num} of {total_points})  --  "
             f"{remaining:.1f}s  --  [{face_status}]"
         )
+
+    def _log(self, elapsed, feature, pointer):
+        """Keeps one reading for the CSV file (see RUN_ACCURACY_TEST)."""
+        def rounded(value, digits):
+            return None if value is None else round(value, digits)
+
+        fx, vy, iy, hx = feature if feature is not None else (None, None, None, None)
+        target_x, target_y = self.current_target_px
+        self.log_rows.append([self.stage, self.target_index + 1, round(target_x), round(target_y),
+                              round(elapsed, 3)]
+                             + [rounded(v, 5) for v in (fx, vy, iy, hx)]
+                             + [rounded(pointer[0], 1), rounded(pointer[1], 1),
+                                rounded(self.gaze_engine.get_fps(), 1)])
 
     def _finish_current_target(self, dt):
         if self._sample_event is not None:
             self._sample_event.cancel()
             self._sample_event = None
+
+        if self.stage == "test":
+            self.test_results.append((*self.current_target_px, self.pointer_samples))
+            self.target_index += 1
+            if self.target_index < len(ACCURACY_TEST_POINTS):
+                self._show_current_target()
+            else:
+                self._finish_test()
+            return
 
         if self.samples:
             avg_fx = sum(self.samples) / len(self.samples)
@@ -1266,17 +1326,79 @@ class CalibrationScreen(Screen):
             self._finish_calibration()
 
     def _finish_calibration(self):
-        self.dot.pos = (-100, -100)
-        self._place_label("center", 36, 0.3)
         try:
-            summary = self.gaze_engine.fit_calibration()
-            self.instruction_label.text = f"Calibration complete!\n{summary}"
+            self.summary = "Calibration complete!\n" + self.gaze_engine.fit_calibration()
         except ValueError as e:
             # Not enough usable samples (e.g. face wasn't visible) --
             # fall back to mouse rather than leaving gaze half-broken.
             print(f"[Calibration] {e} -- falling back to mouse control.")
-            self.instruction_label.text = f"Calibration incomplete: {e}\nUsing mouse control instead."
+            self.summary = f"Calibration incomplete: {e}\nUsing mouse control instead."
+            self._show_result()
+            return
+        if RUN_ACCURACY_TEST:
+            self.stage = "test"
+            self.target_index = 0
+            self._show_current_target()
+        else:
+            self._show_result()
+
+    def _finish_test(self):
+        """Works out the accuracy test's result (see RUN_ACCURACY_TEST)."""
+        offsets_x, offsets_y, shakes, missing = [], [], [], 0
+        for target_x, target_y, pointers in self.test_results:
+            seen = [(x, y) for x, y in pointers if x is not None and y is not None]
+            missing += len(pointers) - len(seen)
+            if not seen:
+                continue
+            xs = np.array([x for x, y in seen])
+            ys = np.array([y for x, y in seen])
+            # Accuracy: how far the average pointer position is from the dot.
+            offsets_x.append(abs(xs.mean() - target_x))
+            offsets_y.append(abs(ys.mean() - target_y))
+            # Precision: how far the pointer strays from its own average.
+            shakes.append(np.sqrt(np.mean((xs - xs.mean()) ** 2 + (ys - ys.mean()) ** 2)))
+        if not shakes:
+            self.summary += "\nAccuracy test: no gaze pointer (up/down or left/right uses the mouse)"
+        else:
+            distance = np.mean(np.hypot(offsets_x, offsets_y)) / SCREEN_PX_PER_CM
+            self.summary += (
+                f"\nAccuracy test: {distance:.1f} cm off on average "
+                f"(left/right {np.mean(offsets_x) / SCREEN_PX_PER_CM:.1f} cm, "
+                f"up/down {np.mean(offsets_y) / SCREEN_PX_PER_CM:.1f} cm), "
+                f"shaking {np.mean(shakes) / SCREEN_PX_PER_CM:.1f} cm"
+            )
+            if missing:
+                self.summary += f"\n({missing} readings had no gaze pointer)"
+        self._show_result()
+
+    def _show_result(self):
+        self.dot.pos = (-100, -100)
+        self.stage = "result"
+        self._place_label("center", 30, 0.5)
+        fps = self.gaze_engine.get_fps()
+        if fps is not None:
+            self.summary += f"\nCamera: {fps:.0f} pictures a second"
+        saved = self._save_log()
+        self.instruction_label.text = self.summary + (f"\nReadings saved to {saved}" if saved else "")
         self._leave_after(RESULT_SECONDS)  # long enough to read (or photograph) the result
+
+    def _save_log(self):
+        """Saves every reading to logs/gaze_<date>_<time>.csv. Returns the
+        file's name, or "" if it couldn't be saved."""
+        if not self.log_rows:
+            return ""
+        try:
+            os.makedirs(LOG_DIR, exist_ok=True)
+            name = time.strftime("gaze_%Y%m%d_%H%M%S.csv")
+            with open(os.path.join(LOG_DIR, name), "w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(["stage", "dot", "dot_x", "dot_y", "seconds",
+                                 "fx", "vy", "iy", "hx", "pointer_x", "pointer_y", "camera_fps"])
+                writer.writerows(self.log_rows)
+            return f"logs/{name}"
+        except OSError as e:
+            print(f"[Calibration] Could not save the readings: {e}")
+            return ""
 
     # ---- leaving -----------------------------------------------------------
     def _leave_after(self, seconds):
