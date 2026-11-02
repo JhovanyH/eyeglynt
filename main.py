@@ -43,7 +43,7 @@ from kivy.uix.widget import Widget
 from kivy.core.image import Image as CoreImage
 from kivy.utils import escape_markup
 
-from gaze_engine import GazeEngine, SCREEN_PX_PER_CM
+from gaze_engine import GazeEngine, SCREEN_PX_PER_CM_X, SCREEN_PX_PER_CM_Y
 from icons import draw_icon
 
 
@@ -1086,7 +1086,7 @@ ACCURACY_TEST_POINTS = [
     (0.25, 0.65), (0.50, 0.65), (0.75, 0.65),   # upper row, left to right
     (0.75, 0.30), (0.50, 0.30), (0.25, 0.30),   # lower row, right to left
 ]
-# Centimetres on the screen use SCREEN_PX_PER_CM, set in gaze_engine.py.
+# Centimetres on the screen use SCREEN_PX_PER_CM_X and _Y, set in gaze_engine.py.
 LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
 
 GREEN_TEXT = rgb(120, 220, 120)  # "Face detected"
@@ -1397,11 +1397,11 @@ class CalibrationScreen(Screen):
             missing += len(pointers) - len(seen)
             if not seen:
                 continue
-            xs = np.array([x for x, y in seen]) / SCREEN_PX_PER_CM   # in cm
-            ys = np.array([y for x, y in seen]) / SCREEN_PX_PER_CM
+            xs = np.array([x for x, y in seen]) / SCREEN_PX_PER_CM_X   # in cm
+            ys = np.array([y for x, y in seen]) / SCREEN_PX_PER_CM_Y
             # Accuracy: how far the average pointer position is from the dot.
-            dx = xs.mean() - target_x / SCREEN_PX_PER_CM
-            dy = ys.mean() - target_y / SCREEN_PX_PER_CM
+            dx = xs.mean() - target_x / SCREEN_PX_PER_CM_X
+            dy = ys.mean() - target_y / SCREEN_PX_PER_CM_Y
             offsets_x.append(abs(dx))
             offsets_y.append(abs(dy))
             # Precision: how far the pointer strays from its own average.
