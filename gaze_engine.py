@@ -204,10 +204,42 @@ MIN_FIT_R2 = 0.6
 # (stable landmarks, about 9 cm apart on an adult face). The correction
 # assumes the user faces the middle of the screen.
 FACE_SIZE_CORNERS = (33, 263)
-NOSE_TIP = 1   # landmark used for the head position (see _head_position)
 # The correction is kept within this range, so one bad face reading
 # can't throw the pointer across the screen.
 DISTANCE_SCALE_LIMITS = (0.7, 1.4)
+
+# --- Head movement correction ------------------------------------------
+# fx and iy say where the eye points INSIDE the head. When the head turns
+# or moves after calibration, the same eye position points somewhere else
+# on the screen, so the pointer drifts away from where the user looks
+# (seen in every accuracy test on 29-30 October, and noticed by the
+# team). So the head's pose is measured in every picture, and the pointer
+# is moved by as much as the head's change since calibration moves the
+# gaze on the screen:
+#     head turned or tilted by an angle:  viewing distance x tan(angle)
+#     head moved sideways or up/down:     the same distance
+# The angles come from MediaPipe's 3D landmarks (see _head_pose); the
+# position is the middle of the outer eye corners, converted to cm with
+# EYE_CORNER_DISTANCE_CM. The user never has to move their head: this
+# only corrects movements that happen anyway. Set HEAD_CORRECTION to
+# False to compare with and without it.
+HEAD_CORRECTION = True
+VIEWING_DISTANCE_CM = 40       # eyes to screen during calibration
+SCREEN_PX_PER_CM = 58.8        # the 10.1-inch 1280 x 800 screen: 1509 px along its 25.7 cm diagonal
+EYE_CORNER_DISTANCE_CM = 9.0   # typical adult distance between the outer eye corners
+# Points on opposite sides of the face, used to measure how far the head
+# is turned (left and right points) and tilted (top and bottom points).
+# All of them stay in the picture when the camera is close and the chin
+# is cut off (as in the 30 October video). On those video frames the
+# pairs agreed closely (correlation 0.98 to 0.99), and the averaged
+# angles wobbled by only about 0.1 (turn) and 0.2 (tilt) degrees from
+# one picture to the next.
+TURN_PAIRS = [(33, 263), (234, 454), (61, 291)]   # outer eye corners, sides of the face, mouth corners
+TILT_PAIRS = [(10, 0), (168, 2), (9, 164)]        # top of the forehead / top of the nose / between the
+                                                  # eyebrows, each with a point between the nose and lips
+# The head moves slowly, and MediaPipe's depth is less steady than its
+# x and y, so the head's pose is smoothed more than the eye measurements.
+HEAD_SMOOTHING_ALPHA = 0.1
 
 
 def _ensure_model_downloaded():
@@ -263,17 +295,48 @@ def _compute_iris_height(landmarks, w, h):
     return total / 2
 
 
-def _head_position(landmarks):
-    """Where the head is, for the readings log (testing): the nose tip's
-    position in the picture (0 to 1 across and down), and how far the
-    head is turned left or right: the nose tip's distance from the middle
-    of the two outer eye corners, divided by the distance between them
-    (0 = facing the camera)."""
-    nose = landmarks[NOSE_TIP]
-    a, b = landmarks[FACE_SIZE_CORNERS[0]], landmarks[FACE_SIZE_CORNERS[1]]
-    width = abs(b.x - a.x)
-    turn = (nose.x - (a.x + b.x) / 2) / width if width > 0 else 0.0
-    return nose.x, nose.y, turn
+def _head_pose(landmarks, w, h):
+    """The head's pose in a picture of size w x h, as (turn, tilt, x, y):
+        turn: how far the head is turned to the right (radians)
+        tilt: how far the head is tilted down (radians)
+        x, y: the middle of the two outer eye corners (picture pixels)
+    MediaPipe gives every landmark a depth z (smaller = closer to the
+    camera) in the same units as x. Two points on opposite sides of the
+    face are at the same depth when the face looks straight at the
+    camera. When the head turns right, its right side moves away from
+    the camera, and atan(depth difference / distance between the points)
+    is the angle it turned; the same with top and bottom points for the
+    tilt. Each angle is the average over several pairs (TURN_PAIRS,
+    TILT_PAIRS). The picture is mirrored, so the picture's right is the
+    user's right, which is also the screen's right."""
+    def point(i):
+        return landmarks[i].x * w, landmarks[i].y * h, landmarks[i].z * w
+
+    turns = []
+    for a, b in TURN_PAIRS:
+        (ax, _, az), (bx, _, bz) = sorted([point(a), point(b)])   # left point first
+        turns.append(np.arctan2(bz - az, bx - ax))
+    tilts = []
+    for a, b in TILT_PAIRS:
+        (_, ay, az), (_, by, bz) = sorted([point(a), point(b)], key=lambda p: p[1])   # top point first
+        tilts.append(np.arctan2(bz - az, by - ay))
+    (ax, ay, _), (bx, by, _) = point(FACE_SIZE_CORNERS[0]), point(FACE_SIZE_CORNERS[1])
+    return float(np.mean(turns)), float(np.mean(tilts)), (ax + bx) / 2, (ay + by) / 2
+
+
+def _head_shift(pose, reference, face_size, distance_cm):
+    """How far the gaze has moved on the screen because the head turned or
+    moved from the `reference` pose to `pose` (see HEAD_CORRECTION and
+    _head_pose), as (x, y) in screen pixels, y upwards as in Kivy.
+    face_size: the outer eye corners' distance now in picture pixels (to
+    turn picture pixels into cm); distance_cm: the eyes' distance from
+    the screen now."""
+    turn, tilt, x, y = pose
+    turn0, tilt0, x0, y0 = reference
+    cm_per_pixel = EYE_CORNER_DISTANCE_CM / face_size
+    right_cm = distance_cm * np.tan(turn - turn0) + (x - x0) * cm_per_pixel
+    down_cm = distance_cm * np.tan(tilt - tilt0) + (y - y0) * cm_per_pixel
+    return right_cm * SCREEN_PX_PER_CM, -down_cm * SCREEN_PX_PER_CM
 
 
 def _crop_square(image, cx, cy, radius):
@@ -447,7 +510,8 @@ class _Smoother:
 
     1. Spike filter: the middle value (median) of the last 3 readings,
        so a single bad reading, such as a wrong glint, is ignored.
-    2. Exponential moving average (SMOOTHING_ALPHA) to calm the jitter.
+    2. Exponential moving average (`alpha`, normally SMOOTHING_ALPHA) to
+       calm the jitter.
     3. When a reading is missing (None: no glint, or a blink), the last
        value is kept for up to `hold_time` seconds, then forgotten
        (see IRIS_HOLD_TIME and GLINT_HOLD_TIME).
@@ -455,8 +519,9 @@ class _Smoother:
     `value` is the cleaned-up measurement, or None if there is none.
     """
 
-    def __init__(self, hold_time):
+    def __init__(self, hold_time, alpha=SMOOTHING_ALPHA):
         self.hold_time = hold_time
+        self.alpha = alpha
         self.reset()
 
     def reset(self):
@@ -476,7 +541,7 @@ class _Smoother:
         if self.value is None:
             self.value = spike_free  # first reading: nothing to blend with yet
         else:
-            self.value = SMOOTHING_ALPHA * spike_free + (1 - SMOOTHING_ALPHA) * self.value
+            self.value = self.alpha * spike_free + (1 - self.alpha) * self.value
 
 
 class _Eye:
@@ -861,12 +926,13 @@ class GazeEngine:
         self._fx = _Smoother(IRIS_HOLD_TIME)
         self._iy = _Smoother(IRIS_HOLD_TIME)
         self._face_size = _Smoother(IRIS_HOLD_TIME)
+        self._head = [_Smoother(IRIS_HOLD_TIME, HEAD_SMOOTHING_ALPHA) for _ in range(4)]  # see _head_pose
         self._eyes = [_Eye(RIGHT_IRIS_CENTER, RIGHT_IRIS_EDGE, RIGHT_EYE_CORNERS),
                       _Eye(LEFT_IRIS_CENTER, LEFT_IRIS_EDGE, LEFT_EYE_CORNERS)]
         self._openness_history = []  # eye openness in recent frames, for the blink check
         self._closed_frames = 0      # frames in a row with the eyes nearly closed
         self._latest_face_size = None  # smoothed face size, shared with the Kivy thread
-        self._latest_head = None       # see _head_position, None if no face seen
+        self._latest_head = None       # smoothed _head_pose, None if no face seen
         self._latest_debug_frame = None  # RGB numpy frame with dots drawn, for a live preview
         self._latest_eyes = None  # (full frame, glint/pupil points, iris centres) for close-ups
         self._fps = None          # pictures processed per second, measured
@@ -880,6 +946,9 @@ class GazeEngine:
         self._x_points = []  # (hx, fx, screen_x); hx is None if no glint was seen
         self._y_points = []  # (vy, iy, screen_y); vy is None if no glint was seen
         self._shakes = []    # (fx, vy, iy, hx) shake at each dot (see add_calibration_point)
+        self._x_heads = []   # the head's pose at each of _x_points (None if unknown)
+        self._y_heads = []   # the same for _y_points
+        self._calib_head = None  # the head's average pose during calibration
         self._x_fit = None
         self._y_fit = None
         self._x_backup = None
@@ -973,12 +1042,14 @@ class GazeEngine:
             if not result.face_landmarks:
                 feature = None
                 # Reset so re-acquiring doesn't drag from a stale position.
-                for smoother in [self._fx, self._iy, self._face_size] + \
+                for smoother in [self._fx, self._iy, self._face_size] + self._head + \
                         [eye.vy for eye in self._eyes] + [eye.hx for eye in self._eyes]:
                     smoother.reset()
             else:
                 landmarks = result.face_landmarks[0]
                 self._face_size.update(_face_size(landmarks, sw, sh))
+                for smoother, value in zip(self._head, _head_pose(landmarks, sw, sh)):
+                    smoother.update(value)
                 points = []
                 if self._is_blink(landmarks, sw, sh):
                     # Keep the last measurements until the eyes open again.
@@ -1019,7 +1090,8 @@ class GazeEngine:
 
             with self._lock:
                 self._latest_feature = feature
-                self._latest_head = _head_position(result.face_landmarks[0]) if result.face_landmarks else None
+                head = [smoother.value for smoother in self._head]
+                self._latest_head = None if None in head else tuple(head)
                 self._latest_face_size = self._face_size.value
                 self._latest_debug_frame = debug_frame
                 self._latest_eyes = eyes
@@ -1045,8 +1117,8 @@ class GazeEngine:
             return self._latest_debug_frame
 
     def get_head(self):
-        """(nose x, nose y, turn), see _head_position, or None if no face
-        is currently detected. For the readings log."""
+        """The head's pose (turn, tilt, x, y), see _head_pose, smoothed,
+        or None if no face is currently detected."""
         with self._lock:
             return self._latest_head
 
@@ -1091,9 +1163,11 @@ class GazeEngine:
         when no glint was seen at that dot. `shakes` is how much each of
         (fx, vy, iy, hx) wobbled at the dot (standard deviation, None if
         unknown), used to choose the fits (see _fit_axis). The current
-        face size is stored too, as the reference for the distance
-        correction."""
+        face size and head pose are stored too, as the references for the
+        distance and head-movement corrections."""
+        head = self.get_head()
         self._x_points.append((hx, fx, screen_x))
+        self._x_heads.append(head)
         self._shakes.append(shakes or (None, None, None, None))
         with self._lock:
             face_size = self._latest_face_size
@@ -1101,6 +1175,7 @@ class GazeEngine:
             self._calib_face_sizes.append(face_size)
         if screen_y is not None and iy is not None:
             self._y_points.append((vy, iy, screen_y))
+            self._y_heads.append(head)
 
     def clear_calibration(self):
         self._x_points = []
@@ -1112,6 +1187,9 @@ class GazeEngine:
         self._y_backup = None
         self._calib_face_sizes = []
         self._calib_face_size = None
+        self._x_heads = []
+        self._y_heads = []
+        self._calib_head = None
 
     def fit_calibration(self):
         """Fits left/right and up/down (see _fit_axis): each uses the
@@ -1123,8 +1201,21 @@ class GazeEngine:
         calibration)."""
         if len(self._x_points) < 2:
             raise ValueError(f"Need at least 2 calibration points, got {len(self._x_points)}")
+
+        # References for the distance and head-movement corrections.
+        self._centre_x = float(np.mean([p[2] for p in self._x_points]))
+        if self._y_points:
+            self._centre_y = float(np.mean([p[2] for p in self._y_points]))
+        if self._calib_face_sizes:
+            self._calib_face_size = float(np.mean(self._calib_face_sizes))
+            print(f"[Calibration] face size {self._calib_face_size:.0f} px (distance reference)")
+        heads = [head for head in self._x_heads if head is not None]
+        if heads:
+            self._calib_head = tuple(float(v) for v in np.mean(heads, axis=0))
+
         print(f"[Calibration] left/right, {len(self._x_points)} points:")
-        self._x_fit, self._x_backup = _fit_axis(self._x_points, (self._typical_shake(3), self._typical_shake(0)))
+        self._x_fit, self._x_backup = _fit_axis(self._without_head_shift(self._x_points, self._x_heads, 0),
+                                                (self._typical_shake(3), self._typical_shake(0)))
         if self._x_fit is None:
             raise ValueError("left/right: dots seen at fewer than 2 positions")
         if self._x_fit["r2"] < MIN_FIT_R2:
@@ -1133,16 +1224,9 @@ class GazeEngine:
             raise ValueError(f"left/right fit too weak (R^2 = {weak:.2f})")
         summary = f"Left/right fit {self._x_fit['r2']:.2f} ({self._x_fit['name']})"
 
-        # References for the distance correction.
-        self._centre_x = float(np.mean([p[2] for p in self._x_points]))
-        if self._y_points:
-            self._centre_y = float(np.mean([p[2] for p in self._y_points]))
-        if self._calib_face_sizes:
-            self._calib_face_size = float(np.mean(self._calib_face_sizes))
-            print(f"[Calibration] face size {self._calib_face_size:.0f} px (distance reference)")
-
         print(f"[Calibration] up/down, {len(self._y_points)} points:")
-        self._y_fit, self._y_backup = _fit_axis(self._y_points, (self._typical_shake(1), self._typical_shake(2)))
+        self._y_fit, self._y_backup = _fit_axis(self._without_head_shift(self._y_points, self._y_heads, 1),
+                                                (self._typical_shake(1), self._typical_shake(2)))
         if self._y_fit is None:
             return summary + "\nUp/down: not enough data, using the mouse"
         if self._y_fit["r2"] < MIN_FIT_R2:
@@ -1150,6 +1234,31 @@ class GazeEngine:
             self._y_fit = None
             return summary + f"\nUp/down fit {weak:.2f} (too weak, using the mouse)"
         return summary + f"\nUp/down fit {self._y_fit['r2']:.2f} ({self._y_fit['name']})"
+
+    def _without_head_shift(self, points, heads, axis):
+        """The calibration points with each dot's target moved back by the
+        head's shift at that dot (axis 0 = x, 1 = y; see _head_shift).
+        The head moves a little during calibration too; without this,
+        those movements would be learned as if they were eye movements."""
+        if not HEAD_CORRECTION or self._calib_head is None or not self._calib_face_size:
+            return points
+        corrected = []
+        for (glint, iris, screen), head in zip(points, heads):
+            shift = 0.0
+            if head is not None:
+                shift = _head_shift(head, self._calib_head, self._calib_face_size, VIEWING_DISTANCE_CM)[axis]
+            corrected.append((glint, iris, screen - shift))
+        return corrected
+
+    def _head_correction(self):
+        """The head's shift since calibration (see _head_shift), as (x, y)
+        screen pixels, or (0, 0) if the correction is off or unknown."""
+        head = self.get_head()
+        with self._lock:
+            face_size = self._latest_face_size
+        if not HEAD_CORRECTION or head is None or self._calib_head is None or not face_size:
+            return 0.0, 0.0
+        return _head_shift(head, self._calib_head, face_size, VIEWING_DISTANCE_CM * self._distance_scale())
 
     def _typical_shake(self, index):
         """The typical (median) shake of measurement `index` of (fx, vy,
@@ -1184,7 +1293,9 @@ class GazeEngine:
         if x is None:
             return None
         # Distance correction: stretch or shrink around the middle.
-        return self._centre_x + (x - self._centre_x) * self._distance_scale()
+        x = self._centre_x + (x - self._centre_x) * self._distance_scale()
+        # Head-movement correction (see HEAD_CORRECTION).
+        return x + self._head_correction()[0]
 
     def get_screen_y(self):
         """Returns the predicted screen Y (Kivy: 0 = bottom) from the
@@ -1201,4 +1312,6 @@ class GazeEngine:
         if y is None:
             return None
         # Distance correction: stretch or shrink around the middle.
-        return self._centre_y + (y - self._centre_y) * self._distance_scale()
+        y = self._centre_y + (y - self._centre_y) * self._distance_scale()
+        # Head-movement correction (see HEAD_CORRECTION).
+        return y + self._head_correction()[1]
