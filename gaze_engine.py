@@ -88,7 +88,7 @@ PI_FOCUS_DISTANCE_M = 0.4
 # the app's preview shows your face upside down. read() then turns the
 # picture the right way up first, because MediaPipe is made for upright
 # faces.
-PI_CAMERA_UPSIDE_DOWN = True
+PI_CAMERA_UPSIDE_DOWN = False
 # The Pi captures at 1536x864, the sensor's own full-view mode. The
 # glints are only a few pixels wide, so the eyes need this detail.
 # MediaPipe gets a half-size copy (768x432, every 2nd pixel), because it
