@@ -244,8 +244,20 @@ DISTANCE_SCALE_LIMITS = (0.7, 1.4)
 # False to compare with and without it.
 HEAD_CORRECTION = True
 VIEWING_DISTANCE_CM = 40       # eyes to screen during calibration
-SCREEN_PX_PER_CM = 58.8        # the 10.1-inch 1280 x 800 screen: 1509 px along its 25.7 cm diagonal
 EYE_CORNER_DISTANCE_CM = 9.0   # typical adult distance between the outer eye corners
+# The screen, to turn centimetres into screen pixels and back. The Pi
+# sends SCREEN_RESOLUTION pixels to the 10.1-inch screen (1920 x 1080 is
+# the only choice it offers in Screen Configuration), and the screen
+# shows them on a picture area of SCREEN_WIDTH_CM x SCREEN_HEIGHT_CM,
+# measured with a ruler. The screen's own pixels are 1280 x 800, so the
+# picture is scaled to fit and is squeezed more across than up and down:
+# left/right and up/down need separate scales. (Until 2 November one
+# scale of 58.8 pixels per cm, for 1280 x 800, was used for both, which
+# made the accuracy test's centimetres about 1.5 times too big.)
+SCREEN_RESOLUTION = (1920, 1080)
+SCREEN_WIDTH_CM, SCREEN_HEIGHT_CM = 21.5, 13.5   # measured on 2 November
+SCREEN_PX_PER_CM_X = SCREEN_RESOLUTION[0] / SCREEN_WIDTH_CM    # left/right
+SCREEN_PX_PER_CM_Y = SCREEN_RESOLUTION[1] / SCREEN_HEIGHT_CM   # up/down
 # Points on opposite sides of the face, used to measure how far the head
 # is turned (left and right points) and tilted (top and bottom points).
 # All of them stay in the picture when the camera is close and the chin
@@ -355,7 +367,7 @@ def _head_shift(pose, reference, face_size, distance_cm):
     cm_per_pixel = EYE_CORNER_DISTANCE_CM / face_size
     right_cm = distance_cm * np.tan(turn - turn0) + (x - x0) * cm_per_pixel
     down_cm = distance_cm * np.tan(tilt - tilt0) + (y - y0) * cm_per_pixel
-    return right_cm * SCREEN_PX_PER_CM, -down_cm * SCREEN_PX_PER_CM
+    return right_cm * SCREEN_PX_PER_CM_X, -down_cm * SCREEN_PX_PER_CM_Y
 
 
 def _crop_square(image, cx, cy, radius):
