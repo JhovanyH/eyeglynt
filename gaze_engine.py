@@ -242,7 +242,16 @@ DISTANCE_SCALE_LIMITS = (0.7, 1.4)
 # EYE_CORNER_DISTANCE_CM. The user never has to move their head: this
 # only corrects movements that happen anyway. Set HEAD_CORRECTION to
 # False to compare with and without it.
-HEAD_CORRECTION = True
+#
+# It is OFF: on the Pi's two real calibrations of 2-3 November, it made
+# the accuracy test worse. Recomputed from the saved readings, the
+# average error went from 2.0 to 3.5 cm (camera above the screen; the
+# head moved about 3 to 4 cm down during calibration) and from 1.7 to
+# 2.1 cm (camera below the screen). Probably the camera's view of the
+# eye already changes when the head moves, so the eye measurements
+# already follow part of the head's movement, and correcting it again
+# overdoes it. The head's pose is still measured and saved in the log.
+HEAD_CORRECTION = False
 VIEWING_DISTANCE_CM = 40       # eyes to screen during calibration
 EYE_CORNER_DISTANCE_CM = 9.0   # typical adult distance between the outer eye corners
 # The screen, to turn centimetres into screen pixels and back. The Pi
@@ -829,9 +838,15 @@ def _fit_axis(points, shakes):
     shake_of = {"glint": shakes[0], "iris": shakes[1]}
     candidates = []  # (name, points used, inputs used)
     glint_points = [p for p in points if p[0] is not None]
-    # The glint fits are only tried if glints were seen at 2 out of 3 dots
-    # or more; fitted to fewer dots, a line can fit well just by chance.
-    if (len(glint_points) >= 2 * len(points) / 3
+    # The glint fits are only tried if glints were seen at EVERY dot. If
+    # they were missing at some dots, they will also be missing in that
+    # part of the screen in use, and the pointer then keeps switching
+    # between the glint fit and the iris backup, which don't agree
+    # exactly, so it jumps. (On 3 November, with the camera above the
+    # screen, the glints were lost at the bottom dots; recomputed from
+    # the readings, using the iris for both directions gave 1.6 cm and
+    # 1.5 cm of shaking, against 2.0 cm and 2.9 cm with the glints.)
+    if (len(glint_points) == len(points)
             and len({round(screen) for g, i, screen in glint_points}) >= 2):
         candidates.append(("glints", glint_points, ["glint"]))
         candidates.append(("glints + iris", glint_points, ["glint", "iris"]))
