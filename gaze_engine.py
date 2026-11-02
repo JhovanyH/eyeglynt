@@ -157,6 +157,16 @@ GLINT_HOLD_TIME = 0.3   # seconds
 # The remembered gap between the two glints (see _Eye) is forgotten
 # after this many pictures in a row without the pair.
 MAX_MISSED_FRAMES = 15
+# When only one glint is visible, it is only used if it is near where
+# the glints were in the last picture (GLINT_JUMP_LIMIT). If the head
+# moved while the glints were hidden (a blink, the face lost for a
+# moment), the glint is never near that old place again, and before
+# 2 November every glint after that was thrown away: the calibration
+# screen said "no IR glints" although the white glint dots were
+# showing. Now the old place is forgotten after this many pictures in
+# a row in which the glints were thrown away, and the glint nearest
+# the pupil is taken again.
+GLINT_RESTART_FRAMES = 3
 
 # --- Blinks ----------------------------------------------------------
 # During a blink the iris is hidden and MediaPipe only guesses where it
@@ -566,6 +576,15 @@ class _Eye:
         self.half_gap = None          # from the middle of the pair to the right-hand glint
         self.middle = None            # where the middle of the pair was last time
         self.frames_without_pair = 0  # pictures in a row in which the pair wasn't found
+        self.frames_rejected = 0      # pictures in a row in which the glints were thrown away
+
+    def forget(self):
+        """Forgets everything remembered about the glints. Used when the
+        face is lost: it may come back in another place or distance."""
+        self.half_gap = None
+        self.middle = None
+        self.frames_without_pair = 0
+        self.frames_rejected = 0
 
     def measure(self, frame, landmarks):
         """Measures this eye in the full-size picture and updates vy and
@@ -658,7 +677,16 @@ class _Eye:
                 last_x, last_y = self.middle
                 middle = min(guesses, key=lambda m: np.hypot(m[0] - last_x, m[1] - last_y))
                 if np.hypot(middle[0] - last_x, middle[1] - last_y) > GLINT_JUMP_LIMIT * iris_radius:
-                    return None  # no glint where one is expected: can't tell
+                    # No glint where one is expected: can't tell which it is.
+                    self.frames_rejected += 1
+                    if self.frames_rejected >= GLINT_RESTART_FRAMES:
+                        # Not a passing stray reflection: the glints have
+                        # moved (see GLINT_RESTART_FRAMES). Start again
+                        # from the glint nearest the pupil next time.
+                        self.middle = None
+                        self.frames_rejected = 0
+                    return None
+        self.frames_rejected = 0
         self.middle = middle
         return middle
 
@@ -1045,6 +1073,8 @@ class GazeEngine:
                 for smoother in [self._fx, self._iy, self._face_size] + self._head + \
                         [eye.vy for eye in self._eyes] + [eye.hx for eye in self._eyes]:
                     smoother.reset()
+                for eye in self._eyes:
+                    eye.forget()
             else:
                 landmarks = result.face_landmarks[0]
                 self._face_size.update(_face_size(landmarks, sw, sh))
