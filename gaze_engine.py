@@ -117,6 +117,15 @@ LEFT_EYE_LIDS = (386, 374)
 # wet edge of the eyelid or glasses, not an LED reflection.
 GLINT_MIN_BRIGHTNESS = 200   # 0 = black, 255 = white
 GLINT_MAX_AREA = 0.1         # 10% of the iris
+# A glint is a bright dot on the darker iris or pupil, so it must also be
+# at least GLINT_MIN_CONTRAST brighter than the pixels around it (up to
+# 2 pixels away). The skin of the upper eyelid is often just as bright
+# as a glint under IR, and the top of the search circle reaches it; but
+# a bit of skin is about as bright as the skin around it. In the eye
+# close-ups from the Pi on 2 November, the real glints were 40 to 68
+# brighter than their surroundings and the eyelid-skin spots only 2 to
+# 15, and before this check those skin spots were taken for glints.
+GLINT_MIN_CONTRAST = 25
 # The two IR boards make two glints per eye, always the same distance
 # apart (the head rests on a support). Once that gap is known, two spots
 # only count as the LED pair if their gap is within GLINT_GAP_TOLERANCE
@@ -370,7 +379,9 @@ def find_glints(gray, cx, cy, radius, max_area):
        spots of touching pixels.
     3. Spots bigger than `max_area` pixels are not LED reflections and
        are dropped.
-    4. Each spot's centre is the average of its pixel positions, weighted
+    4. Spots that are not clearly brighter than the pixels around them
+       (GLINT_MIN_CONTRAST) are bits of bright skin, and are dropped.
+    5. Each spot's centre is the average of its pixel positions, weighted
        by how bright each pixel is. This places the centre to a fraction
        of a pixel, which matters because looking from the top to the
        bottom of the screen moves the pupil only a few pixels.
@@ -378,7 +389,9 @@ def find_glints(gray, cx, cy, radius, max_area):
     Returns a list of glint centres (x, y), one per glint, in the
     coordinates of `gray`. An empty list means no glint (IR LEDs off).
     """
-    crop, x0, y0 = _crop_square(gray, cx, cy, radius)
+    # 3 pixels more than the circle, so that spots at its edge have
+    # pixels around them for step 4.
+    crop, x0, y0 = _crop_square(gray, cx, cy, radius + 3)
     if crop.size == 0:
         return []
     rows, cols = np.ogrid[:crop.shape[0], :crop.shape[1]]
@@ -390,6 +403,12 @@ def find_glints(gray, cx, cy, radius, max_area):
             continue  # too big to be an LED reflection
         ys = np.array([pixel[0] for pixel in spot])
         xs = np.array([pixel[1] for pixel in spot])
+        # The pixels up to 2 away from the spot, not in it.
+        in_spot = np.zeros(crop.shape, dtype=bool)
+        in_spot[ys, xs] = True
+        around = (_neighbourhood(in_spot, 2, "max") > 0) & ~in_spot
+        if crop[ys, xs].max() - crop[around].mean() < GLINT_MIN_CONTRAST:
+            continue  # no brighter than its surroundings: skin, not an LED reflection
         # Brighter pixels count more; the dimmest allowed pixel counts 1.
         weights = crop[ys, xs].astype(float) - GLINT_MIN_BRIGHTNESS + 1
         glints.append((x0 + np.average(xs, weights=weights),
