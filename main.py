@@ -127,10 +127,14 @@ REPEAT_TIME = DWELL_TIME  # held keys repeat at the SAME rate as the initial dwe
 EDGE_INSET = 20  # pixels
 
 # For testing only: draws a small yellow circle where the app thinks the
-# person is looking, so you can see how far off the tracking is. Set it to
-# False for the real user tests, because people tend to chase the circle
-# instead of looking at the button.
-SHOW_GAZE_POINTER = True
+# person is looking, so you can see how far off the tracking is. It is
+# off, also while testing: people tend to look at the circle instead of
+# the button, and when the circle is a little off, the eyes follow it and
+# push it further away, so the pointer seems to get worse after a few
+# seconds (reported on 5 November). Without it, the button being looked
+# at still shows where the gaze is: it fills up during the dwell. Set it
+# to True only to check where the pointer is.
+SHOW_GAZE_POINTER = False
 
 # ---------------------------------------------------------------------------
 # 1. TEXT-TO-SPEECH
@@ -1318,7 +1322,7 @@ CALIBRATION_SETTLE_TIME = 1.0   # first part of those seconds is ignored: the
                                 # eyes are still moving onto the new dot. Users
                                 # with motor impairments may need this time.
 COUNTDOWN_SECONDS = 3           # 3, 2, 1 after Start is pressed
-RESULT_SECONDS = 30             # how long the result stays on screen (to photograph it)
+RESULT_SECONDS = 15             # how long the result stays on screen (to photograph it)
 
 # ACCURACY TEST (for testing, and for the results chapter). After
 # calibration, the red dot visits ACCURACY_TEST_POINTS, places between
@@ -1334,11 +1338,17 @@ ACCURACY_TEST_POINTS = [
     (0.75, 0.30), (0.50, 0.30), (0.25, 0.30),   # lower row, right to left
 ]
 # Centimetres on the screen use SCREEN_PX_PER_CM_X and _Y, set in gaze_engine.py.
+# The result screen rates the test in one word, against the letter keys
+# (5.2 x 3.1 cm): "Good" if the pointer is off and shakes by at most
+# GOOD_CM (about half a key's height, so it stays on the key), "OK" up to
+# OK_CM, and "Poor" above that (calibrate again). The details of every
+# test dot are printed in the terminal, and saved in the CSV file.
+GOOD_CM = 1.5
+OK_CM = 2.5
 LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
 
 GREEN_TEXT = rgb(120, 220, 120)  # "Face detected"
 RED_TEXT = rgb(255, 120, 120)    # "Face not detected"
-ORANGE_TEXT = rgb(255, 190, 90)  # "No IR glints"
 
 
 class CalibrationScreen(Screen):
@@ -1451,12 +1461,14 @@ class CalibrationScreen(Screen):
         if feature is None:
             self.face_label.text = "Face not detected -- move into the camera view"
             self.face_label.color = RED_TEXT
-        elif feature[1] is None:
-            # Face found, but no IR glints: up/down would fall back to the mouse.
-            self.face_label.text = "Face detected, but no IR glints (white dots) -- check the IR LEDs"
-            self.face_label.color = ORANGE_TEXT
         else:
-            self.face_label.text = "Face and IR glints detected -- press Start when you are ready"
+            # The IR glints are not needed to start: when they are not seen
+            # at every calibration dot (with the camera above the screen
+            # they hide under the upper eyelid at the bottom dots), the
+            # iris is used instead (see _fit_axis in gaze_engine.py). So a
+            # missing glint is only mentioned, not shown as a problem.
+            glints = "IR glints seen" if feature[1] is not None else "no IR glints, the iris will be used"
+            self.face_label.text = f"Face detected ({glints}) -- press Start when you are ready"
             self.face_label.color = GREEN_TEXT
 
         # The camera works, so the user may start now.
@@ -1620,14 +1632,18 @@ class CalibrationScreen(Screen):
 
     def _finish_calibration(self):
         try:
-            self.summary = "Calibration complete!\n" + self.gaze_engine.fit_calibration()
+            fits = self.gaze_engine.fit_calibration()
         except ValueError as e:
             # Not enough usable samples (e.g. face wasn't visible) --
             # fall back to mouse rather than leaving gaze half-broken.
             print(f"[Calibration] {e} -- falling back to mouse control.")
-            self.summary = f"Calibration incomplete: {e}\nUsing mouse control instead."
+            self.summary = "Calibration did not work, using the mouse -- please calibrate again"
             self._show_result()
             return
+        print("[Calibration] " + fits.replace("\n", "; "))   # the fits, for testing
+        self.summary = "Calibration done"
+        if not self.gaze_engine.is_vertical_calibrated():
+            self.summary += "\nUp/down did not work and uses the mouse -- please calibrate again"
         if RUN_ACCURACY_TEST:
             self.stage = "test"
             self.target_index = 0
@@ -1660,17 +1676,20 @@ class CalibrationScreen(Screen):
             per_dot.append(f"{where}: {abs(dx):.1f} cm too far {'right' if dx > 0 else 'left'}, "
                            f"{abs(dy):.1f} cm too {'high' if dy > 0 else 'low'}, shaking {shake:.1f} cm")
         if not shakes:
-            self.summary += "\nAccuracy test: no gaze pointer (up/down or left/right uses the mouse)"
-        else:
-            distance = np.mean(np.hypot(offsets_x, offsets_y))
-            self.summary += (
-                f"\nAccuracy test: {distance:.1f} cm off on average "
-                f"(left/right {np.mean(offsets_x):.1f} cm, "
-                f"up/down {np.mean(offsets_y):.1f} cm), "
-                f"shaking {np.mean(shakes):.1f} cm\n" + "\n".join(per_dot)
-            )
-            if missing:
-                self.summary += f"\n({missing} readings had no gaze pointer)"
+            self._show_result()   # no gaze pointer: the summary already says why
+            return
+        distance = float(np.mean(np.hypot(offsets_x, offsets_y)))
+        shaking = float(np.mean(shakes))
+        # The details, for testing, in the terminal (see GOOD_CM).
+        print("[Accuracy test] " + "\n[Accuracy test] ".join(per_dot))
+        if missing:
+            print(f"[Accuracy test] {missing} readings had no gaze pointer")
+        worst = max(distance, shaking)
+        rating = ("Good" if worst <= GOOD_CM else "OK" if worst <= OK_CM
+                  else "Poor, please calibrate again")
+        self.summary = self.summary.replace("Calibration done", f"Calibration done: {rating}", 1)
+        self.summary += (f"\n{distance:.1f} cm off (left/right {np.mean(offsets_x):.1f}, "
+                         f"up/down {np.mean(offsets_y):.1f}), shaking {shaking:.1f} cm")
         self._show_result()
 
     def _show_result(self):
@@ -1678,10 +1697,11 @@ class CalibrationScreen(Screen):
         self.stage = "result"
         self._place_label("center", 24, 0.8)
         fps = self.gaze_engine.get_fps()
-        if fps is not None:
-            self.summary += f"\nCamera: {fps:.0f} pictures a second"
         saved = self._save_log()
-        self.instruction_label.text = self.summary + (f"\nReadings saved to {saved}" if saved else "")
+        details = [f"camera {fps:.0f} pictures a second" if fps is not None else "",
+                   f"saved to {saved}" if saved else ""]
+        details = ", ".join(d for d in details if d)
+        self.instruction_label.text = self.summary + (f"\n({details})" if details else "")
         self._leave_after(RESULT_SECONDS)  # long enough to read (or photograph) the result
 
     def _save_log(self):
