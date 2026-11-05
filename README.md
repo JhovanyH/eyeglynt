@@ -31,7 +31,7 @@ https://kivy.org/doc/stable/gettingstarted/installation.html
 | `GazeManager` | Every 1/30th of a second, asks "where is the pointer, and which button is it over?" and starts/stops dwell timers accordingly. |
 | `KeyboardScreen` | Text box + shorthand word row + full QWERTY grid + Speak/Backspace/Clear, matching Figure 29. |
 | `QuickFireScreen` | Tabbed categories (Emergency, Pain, Basic Needs, Social/Emotional, People/Family, Environment) each with phrase buttons, matching Figures 30-31. |
-| `speak()` | Says the text with Piper, a natural voice that works offline (setup steps at the top of the TEXT-TO-SPEECH section of `main.py`). Falls back to `espeak-ng` on the Pi and `pyttsx3` on a laptop. It talks in the background, so the screen doesn't freeze. |
+| `speak()` | Says the text with Piper, a natural voice that works offline (one-time setup on the Pi: `bash setup_voice.sh`). Falls back to `espeak-ng` on the Pi and `pyttsx3` on a laptop. It talks in the background, so the screen doesn't freeze. |
 
 ## 3. The one thing you'll change later: real gaze input
 

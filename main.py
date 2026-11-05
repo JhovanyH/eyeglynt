@@ -135,10 +135,10 @@ SHOW_GAZE_POINTER = True
 # 1. TEXT-TO-SPEECH
 # ---------------------------------------------------------------------------
 # The voice is Piper: a free voice that sounds like a real person and works
-# on the Pi without internet. One-time setup on the Pi, in the Terminal:
-#     ~/eyeglynt_env/bin/pip install --no-deps piper-tts onnxruntime pathvalidate
-#     ~/eyeglynt_env/bin/python -m piper.download_voices --download-dir ~/eyeglynt/voices en_US-lessac-medium
-# ("--no-deps" leaves numpy and protobuf exactly as MediaPipe needs them.)
+# on the Pi without internet. One-time setup on the Pi, in the Terminal
+# (it installs Piper and downloads the voice, see setup_voice.sh):
+#     cd ~/eyeglynt
+#     bash setup_voice.sh
 # The sound plays through the speaker picked in the Pi's volume menu
 # (right-click the speaker icon at the top right, choose MAX98357A, the I2S
 # amplifier).
@@ -149,7 +149,8 @@ SHOW_GAZE_POINTER = True
 
 # Which Piper voice to use. Its two files (.onnx and .onnx.json) are in the
 # "voices" folder next to this file. Other voices can be heard at
-# https://rhasspy.github.io/piper-samples/ and downloaded the same way.
+# https://rhasspy.github.io/piper-samples/ and downloaded with, e.g.,
+# "bash setup_voice.sh en_US-ryan-medium".
 VOICE_NAME = "en_US-lessac-medium"
 # How fast Piper talks: 1.0 is its normal speed, bigger numbers are slower.
 VOICE_SPEED = 1.15
