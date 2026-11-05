@@ -11,7 +11,7 @@
 
 set -e                                        # stop at the first error
 cd "$(dirname "$0")"                          # work inside the eyeglynt folder
-VOICE="${1:-en_US-lessac-medium}"             # the voice to download
+VOICE="${1:-en_US-amy-medium}"                # the voice to download
 ENV="${EYEGLYNT_ENV:-$HOME/eyeglynt_env}"     # the app's Python environment
 
 if [ ! -x "$ENV/bin/python" ]; then

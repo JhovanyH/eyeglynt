@@ -151,7 +151,7 @@ SHOW_GAZE_POINTER = True
 # "voices" folder next to this file. Other voices can be heard at
 # https://rhasspy.github.io/piper-samples/ and downloaded with, e.g.,
 # "bash setup_voice.sh en_US-ryan-medium".
-VOICE_NAME = "en_US-lessac-medium"
+VOICE_NAME = "en_US-amy-medium"
 # How fast Piper talks: 1.0 is its normal speed, bigger numbers are slower.
 VOICE_SPEED = 1.15
 # How loud Piper is: 1.0 is the loudest. Lower it (e.g. 0.7) if it crackles.
