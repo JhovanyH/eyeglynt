@@ -50,6 +50,7 @@ from kivy.utils import escape_markup
 
 from gaze_engine import GazeEngine, SCREEN_PX_PER_CM_X, SCREEN_PX_PER_CM_Y
 from icons import draw_icon
+from dashboard_link import dashboard, slug   # the caregiver dashboard (see dashboard_link.py)
 
 
 def rgb(r, g, b, a=1.0):
@@ -347,17 +348,18 @@ class DwellButton(Button):
 
     progress = NumericProperty(0.0)  # 0.0 -> 1.0
 
-    def __init__(self, on_selected=None, dwell_time=DWELL_TIME,
-                 repeatable=False, repeat_time=REPEAT_TIME,
+    def __init__(self, on_selected=None, dwell_time=None,
+                 repeatable=False, repeat_time=None,
                  bg_color=None, border_color=None, text_color=None,
                  radius=10, icon=None, icon_color=None, icon_layout="top",
                  selectable=True, image=None, **kwargs):
         super().__init__(**kwargs)
         self.on_selected = on_selected
-        self.dwell_time = dwell_time
+        # None = the current DWELL_TIME / REPEAT_TIME (see set_dwell_time).
+        self.dwell_time = dwell_time if dwell_time is not None else DWELL_TIME
         self.repeatable = repeatable
-        self.repeat_time = repeat_time
-        self._active_dwell_time = dwell_time
+        self.repeat_time = repeat_time if repeat_time is not None else REPEAT_TIME
+        self._active_dwell_time = self.dwell_time
         self._event = None
 
         self.selectable = selectable  # False: shown normally, but gaze ignores it
@@ -527,6 +529,42 @@ def _find_dwell_buttons(widget):
     for child in widget.children:
         found.extend(_find_dwell_buttons(child))
     return found
+
+
+# ---------------------------------------------------------------------------
+# 2b. CAREGIVER DASHBOARD -- see dashboard_link.py
+# ---------------------------------------------------------------------------
+def tell_dashboard(btn, interface, kind, element_id, text, category=None, navigation=False):
+    """Records the selection of `btn` in the caregiver dashboard's Activity
+    Log (only while a caregiver has a session running there).
+    interface: "keyboard" or "quickfire"; kind: "key", "shorthand",
+    "phrase", "speak" or "control"; navigation=True for a selection that
+    only moves around the screens (see NAVIGATION_ONLY_IN_FREE_LOOK in
+    dashboard_link.py)."""
+    pointer = None
+    gaze_manager = getattr(App.get_running_app(), "gaze_manager", None)
+    if gaze_manager is not None:
+        x, y = gaze_manager.get_pointer_pos()
+        pointer = (x, Window.height - y)   # pixels from the TOP left of the screen
+    dashboard.selection(interface, kind, element_id, text, category=category,
+                        dwell_s=btn._active_dwell_time, pointer=pointer, navigation=navigation)
+
+
+DEVICE_DWELL_TIME = DWELL_TIME   # the setting at the top, used again when a dashboard session ends
+
+
+def set_dwell_time(seconds):
+    """Changes the dwell time of every button, for example when the
+    caregiver picks another dwell time on the dashboard."""
+    global DWELL_TIME, REPEAT_TIME, CLEAR_CONFIRM_TIME
+    if seconds == DWELL_TIME:
+        return
+    DWELL_TIME = REPEAT_TIME = seconds           # for the buttons made from now on
+    CLEAR_CONFIRM_TIME = REPEAT_TIME + 2.0
+    for screen in App.get_running_app().root.screens:
+        for btn in _find_dwell_buttons(screen):  # and for the ones already there
+            btn.dwell_time = btn.repeat_time = seconds
+    print(f"[Dashboard] Dwell time is now {seconds:.1f} seconds")
 
 
 # ---------------------------------------------------------------------------
@@ -764,7 +802,12 @@ class AppScreen(Screen):
                            bg_color=color, text_color=WHITE, radius=12,
                            border_color=WHITE if own else None, selectable=not own,
                            size_hint_x=TAB_WIDTH,
-                           on_selected=lambda b: self.nav.go(screen_name))
+                           on_selected=lambda b: self._on_tab(b, screen_name))
+
+    def _on_tab(self, btn, screen_name):
+        tell_dashboard(btn, self.TAB, "control", f"tab:{screen_name}", f"{btn.text} tab",
+                       navigation=True)
+        self.nav.go(screen_name)
 
 
 class KeyboardScreen(AppScreen):
@@ -822,9 +865,9 @@ class KeyboardScreen(AppScreen):
         action = dict(bg_color=PURPLE, text_color=WHITE, radius=12, bold=True, font_size=20,
                       icon_layout="top", size_hint_x=0.2)
         row.add_widget(DwellButton(text="Speak", icon="speak",
-                                   on_selected=lambda b: self._speak_text(), **action))
+                                   on_selected=self._speak_text, **action))
         row.add_widget(DwellButton(text="Backspace", icon="erase", repeatable=True,
-                                   on_selected=lambda b: self._backspace(), **action))
+                                   on_selected=self._backspace, **action))
         # Repeatable, so that simply keeping the eyes on it gives the second selection.
         self.clear_btn = DwellButton(text="Clear", repeatable=True, on_selected=self._on_clear,
                                      **{**action, "font_size": 26})
@@ -851,7 +894,7 @@ class KeyboardScreen(AppScreen):
         for word, color in QUICK_ACCESS_WORDS:
             btn = DwellButton(text=word, bold=True, font_size=32, bg_color=color,
                               text_color=DARK_TEXT, radius=12,
-                              on_selected=lambda b: self.say(b.text))
+                              on_selected=self._on_quick_access)
             row.add_widget(btn)
         return row
 
@@ -950,6 +993,7 @@ class KeyboardScreen(AppScreen):
     # -- actions --------------------------------------------------------------
     def _on_cell(self, btn):
         """Runs when one of the 8 big buttons is selected."""
+        self._tell_dashboard_cell(btn)
         if btn.role == "group":
             self.open_group = btn.key_value
         elif btn.role == "char":
@@ -966,6 +1010,24 @@ class KeyboardScreen(AppScreen):
         elif btn.role == "shift":
             self.shift_on = not self.shift_on
         self._refresh_keys()
+
+    def _tell_dashboard_cell(self, btn):
+        """Records the selection of one of the 8 big buttons on the caregiver
+        dashboard (see tell_dashboard). A typed character or Space is a key;
+        the others (a group, Back, 123/ABC, Shift) only move around the
+        keyboard."""
+        if btn.role == "char":
+            tell_dashboard(btn, "keyboard", "key", f"kb:{btn.key_value.upper()}", btn.text)
+        elif btn.role == "space":
+            tell_dashboard(btn, "keyboard", "key", "kb:space", "Space")
+        elif btn.role == "group":
+            tell_dashboard(btn, "keyboard", "control", f"kb:group:{btn.key_value}",
+                           f"Group {btn.text}", navigation=True)
+        else:
+            names = {"back": "Back to the groups", "mode": f"{btn.text} (switch characters)",
+                     "shift": "Shift"}
+            tell_dashboard(btn, "keyboard", "control", f"kb:{btn.role}",
+                           names.get(btn.role, btn.role), navigation=True)
 
     def _start_new_if_spoken(self):
         """After Speak, the first new character starts a new message."""
@@ -991,7 +1053,8 @@ class KeyboardScreen(AppScreen):
         self.composed_text += text
         self._after_edit()
 
-    def _backspace(self):
+    def _backspace(self, btn):
+        tell_dashboard(btn, "keyboard", "key", "kb:backspace", "Backspace")
         self.spoken = False   # Backspace after Speak edits the spoken message
         self.composed_text = self.composed_text[:-1]
         self._after_edit()
@@ -999,10 +1062,13 @@ class KeyboardScreen(AppScreen):
     def _on_clear(self, btn):
         """First selection: ask (see CLEAR_CONFIRM_TIME). Second: erase."""
         if self._clear_timer is None:
+            tell_dashboard(btn, "keyboard", "control", "kb:clear?", "Clear? (asks to confirm)",
+                           navigation=True)
             btn.text = "Clear?"
             self._clear_timer = Clock.schedule_once(lambda dt: self._cancel_clear(),
                                                     CLEAR_CONFIRM_TIME)
             return
+        tell_dashboard(btn, "keyboard", "control", "kb:clear", "Clear (message erased)")
         self._cancel_clear()
         self.composed_text = ""
         self.spoken = False
@@ -1030,13 +1096,22 @@ class KeyboardScreen(AppScreen):
         # shows the text.
         Clock.schedule_once(lambda dt: speak(text), 0.1)
 
-    def _speak_text(self):
-        if self.composed_text.strip():
-            speak(self.composed_text)
-            self.spoken = True
-            self.shift_on = True   # the next message starts with a capital letter
-            self._refresh_text()
-            self._refresh_keys()
+    def _on_quick_access(self, btn):
+        tell_dashboard(btn, "keyboard", "shorthand", f"kb:sh:{slug(btn.text)}", btn.text)
+        self.say(btn.text)
+
+    def _speak_text(self, btn):
+        if not self.composed_text.strip():
+            # Nothing to say, so it only counts in a free-look test.
+            tell_dashboard(btn, "keyboard", "control", "kb:speak", "Speak (nothing typed)",
+                           navigation=True)
+            return
+        tell_dashboard(btn, "keyboard", "speak", "kb:speak", self.composed_text)
+        speak(self.composed_text)
+        self.spoken = True
+        self.shift_on = True   # the next message starts with a capital letter
+        self._refresh_text()
+        self._refresh_keys()
 
     def on_pre_enter(self, *args):
         self.open_group = None   # always start from the groups
@@ -1179,7 +1254,7 @@ class QuickFireScreen(AppScreen):
             tile.key_value = phrase
             grid.add_widget(tile)
         grid.add_widget(DwellButton(text="Back", bold=True, font_size=26, icon="arrow_left",
-                                    icon_layout="left", on_selected=lambda b: self._show_categories(),
+                                    icon_layout="left", on_selected=self._on_back,
                                     **{**KEY_STYLE, "radius": 12}))
         self._show_grid(grid)
 
@@ -1188,9 +1263,19 @@ class QuickFireScreen(AppScreen):
         self.tiles_panel.add_widget(grid)
 
     def _on_category(self, btn):
+        tell_dashboard(btn, "quickfire", "control", f"qf:cat:{slug(btn.key_value)}",
+                       f"Category: {btn.key_value}", navigation=True)
         self._show_phrases(btn.key_value)
 
+    def _on_back(self, btn):
+        tell_dashboard(btn, "quickfire", "control", "qf:back", "Back to the categories",
+                       navigation=True)
+        self._show_categories()
+
     def _on_phrase(self, btn):
+        tell_dashboard(btn, "quickfire", "phrase",
+                       f"qf:{slug(self.current_category)}:{slug(btn.key_value)}", btn.key_value,
+                       category=self.current_category)
         # Shown in the top bar here and in the keyboard's message box, and spoken.
         self.step_label.text = f"Said: {btn.key_value}"
         self.nav.sm.get_screen("keyboard").say(btn.key_value)
@@ -1647,17 +1732,19 @@ class EyeGlyntApp(App):
         self.title = "EyeGlynt"
         keep_speaker_awake()
         start_voice()
+        dashboard.start()   # the caregiver dashboard, if it is installed (dashboard_link.py)
         self.gaze_engine = GazeEngine()
         self.gaze_engine.start()
 
         sm = ScreenManager()
+        self.sm = sm
         self.navigator = Navigator(sm)
         sm.add_widget(KeyboardScreen(self.navigator, name="keyboard"))
         sm.add_widget(QuickFireScreen(self.navigator, name="quickfire"))
         sm.add_widget(
             CalibrationScreen(
                 gaze_engine=self.gaze_engine,
-                on_done=lambda: setattr(sm, "current", "keyboard"),
+                on_done=self._calibration_done,
                 name="calibration",
             )
         )
@@ -1667,7 +1754,36 @@ class EyeGlyntApp(App):
         # for everything else, with automatic fallback to full mouse
         # control if calibration didn't complete.
         self.gaze_manager = GazeManager(sm, gaze_engine=self.gaze_engine)
+        Clock.schedule_interval(self._check_dashboard, 0.1)
         return sm
+
+    def _calibration_done(self):
+        # A recalibration asked for on the dashboard counts as successful if
+        # the gaze engine is calibrated again (see dashboard_link.py).
+        dashboard.recalibration_finished(success=self.gaze_engine.is_calibrated())
+        self.sm.current = "keyboard"
+
+    def _check_dashboard(self, dt):
+        """Runs 10 times a second: tells the caregiver dashboard what the
+        device is doing, and carries out the dashboard's buttons."""
+        calibrating = self.sm.current == "calibration"
+        if not self.gaze_engine.is_camera_ok():
+            state = "idle"   # no camera: mouse only
+        else:
+            state = "calibrating" if calibrating else "tracking"
+        dashboard.update(state, fps=self.gaze_engine.get_fps(),
+                         eyes_seen=self.gaze_engine.get_latest_feature() is not None)
+        for command, details in dashboard.take_commands():
+            if command == "recalibrate":
+                # The caregiver pressed Recalibrate: show the calibration screen.
+                dashboard.recalibration_started("manual_caregiver")
+                if not calibrating:
+                    self.sm.current = "calibration"
+            elif command in ("start_session", "set_dwell_time") and details.get("dwell_time_ms"):
+                # The dwell time the caregiver picked for this session.
+                set_dwell_time(details["dwell_time_ms"] / 1000)
+            elif command == "end_session":
+                set_dwell_time(DEVICE_DWELL_TIME)
 
     def on_start(self):
         # Open maximized, filling the screen but keeping the title bar, so
@@ -1680,6 +1796,7 @@ class EyeGlyntApp(App):
 
     def on_stop(self):
         self.gaze_engine.stop()
+        dashboard.stop()
 
 
 if __name__ == "__main__":

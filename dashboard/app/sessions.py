@@ -6,7 +6,7 @@ from flask import (Blueprint, Response, abort, current_app, flash, redirect,
 from flask_login import current_user, login_required
 
 from . import db, metrics
-from .constants import ALERT_LABELS, BENCHMARKS, CARE_SETTINGS, DWELL_OPTIONS
+from .constants import ALERT_LABELS, BENCHMARKS, CARE_SETTINGS, DEFAULT_DWELL_MS, DWELL_OPTIONS
 
 bp = Blueprint("sessions", __name__)
 
@@ -120,7 +120,7 @@ def start():
             if chosen and not care_setting:
                 errors["care_setting"] = "This patient has no care setting yet. Ask the research team to set it."
         try:
-            dwell = int(form.get("dwell_time_ms", 1500))
+            dwell = int(form.get("dwell_time_ms", DEFAULT_DWELL_MS))
             if dwell not in [d for d, _ in DWELL_OPTIONS]:
                 raise ValueError
         except ValueError:
@@ -171,6 +171,7 @@ def start():
     return render_template(
         "start.html", form=form, errors=errors, patients=patients,
         care_settings=CARE_SETTINGS, dwell_options=DWELL_OPTIONS, device=metrics.device_status(),
+        default_dwell_ms=DEFAULT_DWELL_MS,
     )
 
 

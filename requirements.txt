@@ -3,3 +3,4 @@ pyttsx3>=2.90
 mediapipe>=0.10.30
 opencv-python>=4.9.0
 numpy>=1.26.0
+pymysql>=1.1          # caregiver dashboard link (dashboard_link.py)

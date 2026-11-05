@@ -90,7 +90,7 @@
       <span>Dwell time</span>
       <select class="input" name="dwell_time_ms">
         {% for ms, label in dwell_options %}
-        <option value="{{ ms }}" {{ 'selected' if form.get('dwell_time_ms', '1500') == ms|string }}>{{ label }}</option>
+        <option value="{{ ms }}" {{ 'selected' if form.get('dwell_time_ms', default_dwell_ms|string) == ms|string }}>{{ label }}</option>
         {% endfor %}
       </select>
     </label>
