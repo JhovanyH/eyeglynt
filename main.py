@@ -21,6 +21,8 @@ RUN
 
 import csv
 import os
+import shutil
+import subprocess
 import time
 
 import numpy as np
@@ -129,20 +131,52 @@ SHOW_GAZE_POINTER = True
 # ---------------------------------------------------------------------------
 # 1. TEXT-TO-SPEECH
 # ---------------------------------------------------------------------------
-# pyttsx3 works out of the box on Windows/Mac for testing. On the Pi, you
-# may end up calling espeak-ng directly instead (pyttsx3 just wraps it on
-# Linux anyway) -- swap the internals of speak() later if needed, the rest
-# of the app doesn't care how speak() is implemented.
+# On the Pi the voice is espeak-ng, installed once with
+#     sudo apt install -y espeak-ng
+# It plays through the speaker picked in the Pi's volume menu (right-click
+# the speaker icon at the top right, choose MAX98357A, the I2S amplifier).
+# On a laptop without espeak-ng, pyttsx3 is used instead, so the app can
+# still be tested there.
+
+# How loud the voice is on the Pi: 100 is espeak-ng's normal volume and
+# 200 the loudest (about twice as loud). Lower it if the voice sounds rough.
+TTS_VOLUME = 200
+# How fast the voice talks, in words per minute (espeak-ng's normal is 175).
+TTS_SPEED = 160
+
+ESPEAK = shutil.which("espeak-ng")   # None when espeak-ng isn't installed
+_voice = None   # the espeak-ng program that is talking right now, if any
+
+
 def speak(text: str):
     """
-    Creates a brand-new TTS engine for every single call, instead of
-    reusing one. pyttsx3's Windows voice (SAPI5) has a known quirk where
-    reusing one engine across multiple say()/runAndWait() calls in the
-    same run often goes silent after the first utterance -- a fresh
-    engine each time avoids that reliably. Slightly slower to set up
-    each time, but for a phrase every second or two, it's unnoticeable.
+    Says the text out loud.
+
+    On the Pi, espeak-ng talks in the background and speak() returns at
+    once, so the screen and the gaze pointer keep moving while the voice
+    talks. If an earlier message is still being spoken, it is cut off so
+    two voices never talk over each other.
+
+    On a laptop (no espeak-ng), a brand-new pyttsx3 engine is made for
+    every call, instead of reusing one. pyttsx3's Windows voice (SAPI5)
+    has a known quirk where reusing one engine across multiple
+    say()/runAndWait() calls in the same run often goes silent after the
+    first utterance -- a fresh engine each time avoids that reliably.
+    This one does hold up the screen until the voice has finished.
     """
+    global _voice
     print(f"[TTS] Speaking: {text}")
+    if ESPEAK:
+        try:
+            if _voice is not None and _voice.poll() is None:
+                _voice.terminate()   # stop the previous message
+            # "--" makes sure text that starts with "-" is read out, not
+            # taken as an option.
+            _voice = subprocess.Popen(
+                [ESPEAK, "-a", str(TTS_VOLUME), "-s", str(TTS_SPEED), "--", text])
+        except Exception as e:
+            print(f"[TTS] Error: {e}")
+        return
     try:
         engine = pyttsx3.init()
         engine.say(text)
@@ -150,6 +184,36 @@ def speak(text: str):
         engine.stop()
     except Exception as e:
         print(f"[TTS] Error: {e}")
+
+
+# The amplifier switches itself off when nothing has played for a few
+# seconds, and makes a small "tick" each time it switches back on. While
+# the app is open, silence plays all the time to keep it awake, so every
+# message starts cleanly (the tick then only happens once, as the app
+# opens). Set to False to switch this off.
+KEEP_SPEAKER_AWAKE = True
+_awake = None   # the program playing the silence
+
+
+def keep_speaker_awake():
+    """
+    Pi only: starts playing silence in the background. It stops by
+    itself when the app closes, however the app closes: the little shell
+    command waits for this app's pipe ("read x"), which closes together
+    with the app, and then stops the silence ("kill").
+    """
+    global _awake
+    if not KEEP_SPEAKER_AWAKE or not ESPEAK or not shutil.which("aplay"):
+        return
+    if _awake is not None:
+        return   # already playing
+    try:
+        _awake = subprocess.Popen(
+            ["sh", "-c",
+             "aplay -q -t raw -f S16_LE -r 48000 -c 2 /dev/zero & read x; kill $!"],
+            stdin=subprocess.PIPE)
+    except Exception as e:
+        print(f"[TTS] Could not keep the speaker awake: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -864,8 +928,9 @@ class KeyboardScreen(AppScreen):
         self.shift_on = True   # the next message starts with a capital letter
         self._refresh_text()
         self._refresh_keys()
-        # Speaking holds up the screen until the voice has finished, so it
-        # starts a moment later, once the message box shows the text.
+        # On a laptop, speaking holds up the screen until the voice has
+        # finished, so it starts a moment later, once the message box
+        # shows the text.
         Clock.schedule_once(lambda dt: speak(text), 0.1)
 
     def _speak_text(self):
@@ -1483,6 +1548,7 @@ class CalibrationScreen(Screen):
 class EyeGlyntApp(App):
     def build(self):
         self.title = "EyeGlynt"
+        keep_speaker_awake()
         self.gaze_engine = GazeEngine()
         self.gaze_engine.start()
 
