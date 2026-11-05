@@ -20,9 +20,12 @@ RUN
 """
 
 import csv
+import importlib.util
 import os
+import queue
 import shutil
 import subprocess
+import threading
 import time
 
 import numpy as np
@@ -131,59 +134,153 @@ SHOW_GAZE_POINTER = True
 # ---------------------------------------------------------------------------
 # 1. TEXT-TO-SPEECH
 # ---------------------------------------------------------------------------
-# On the Pi the voice is espeak-ng, installed once with
-#     sudo apt install -y espeak-ng
-# It plays through the speaker picked in the Pi's volume menu (right-click
-# the speaker icon at the top right, choose MAX98357A, the I2S amplifier).
-# On a laptop without espeak-ng, pyttsx3 is used instead, so the app can
-# still be tested there.
+# The voice is Piper: a free voice that sounds like a real person and works
+# on the Pi without internet. One-time setup on the Pi, in the Terminal
+# (it installs Piper and downloads the voice, see setup_voice.sh):
+#     cd ~/eyeglynt
+#     bash setup_voice.sh
+# The sound plays through the speaker picked in the Pi's volume menu
+# (right-click the speaker icon at the top right, choose MAX98357A, the I2S
+# amplifier).
+#
+# Backups, so the app always talks: without Piper or its voice file, the
+# robot-like espeak-ng voice is used (sudo apt install -y espeak-ng), and on
+# a laptop without either, pyttsx3.
 
-# How loud the voice is on the Pi: 100 is espeak-ng's normal volume and
-# 200 the loudest (about twice as loud). Lower it if the voice sounds rough.
-TTS_VOLUME = 200
-# How fast the voice talks, in words per minute (espeak-ng's normal is 175).
-TTS_SPEED = 160
+# Which Piper voice to use. Its two files (.onnx and .onnx.json) are in the
+# "voices" folder next to this file. Other voices can be heard at
+# https://rhasspy.github.io/piper-samples/ and downloaded with, e.g.,
+# "bash setup_voice.sh en_US-ryan-medium".
+VOICE_NAME = "en_US-lessac-medium"
+# How fast Piper talks: 1.0 is its normal speed, bigger numbers are slower.
+VOICE_SPEED = 1.15
+# How loud Piper is: 1.0 is the loudest. Lower it (e.g. 0.7) if it crackles.
+VOICE_VOLUME = 1.0
 
+VOICES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "voices")
+VOICE_FILE = os.path.join(VOICES_DIR, VOICE_NAME + ".onnx")
+APLAY = shutil.which("aplay")   # plays the sound; None when not on Linux
+# Piper is used when it is installed, its voice file is there and aplay can
+# play the sound (that is, on the Pi).
+USE_PIPER = (importlib.util.find_spec("piper") is not None
+             and os.path.exists(VOICE_FILE) and APLAY is not None)
+
+# Backup voice, espeak-ng: 100 is its normal volume and 200 the loudest.
+ESPEAK_VOLUME = 200
+# How fast espeak-ng talks, in words per minute (its normal is 175).
+ESPEAK_SPEED = 140
 ESPEAK = shutil.which("espeak-ng")   # None when espeak-ng isn't installed
-_voice = None   # the espeak-ng program that is talking right now, if any
+
+_messages = queue.Queue()   # messages waiting for the Piper voice
+_player = None   # the program saying a message right now (aplay or espeak-ng)
+_piper_ok = USE_PIPER   # turns False if the Piper voice fails to load
 
 
 def speak(text: str):
     """
     Says the text out loud.
 
-    On the Pi, espeak-ng talks in the background and speak() returns at
-    once, so the screen and the gaze pointer keep moving while the voice
-    talks. If an earlier message is still being spoken, it is cut off so
-    two voices never talk over each other.
-
-    On a laptop (no espeak-ng), a brand-new pyttsx3 engine is made for
-    every call, instead of reusing one. pyttsx3's Windows voice (SAPI5)
-    has a known quirk where reusing one engine across multiple
-    say()/runAndWait() calls in the same run often goes silent after the
-    first utterance -- a fresh engine each time avoids that reliably.
-    This one does hold up the screen until the voice has finished.
+    With Piper or espeak-ng (the Pi), the voice talks in the background
+    and speak() returns at once, so the screen and the gaze pointer keep
+    moving while it talks. A new message cuts off one that is still being
+    spoken, so two messages never talk over each other.
     """
-    global _voice
+    global _player
     print(f"[TTS] Speaking: {text}")
-    if ESPEAK:
+    stop_speaking()
+    if _piper_ok:
+        # Forget any message still waiting to be said, then hand this one
+        # to the Piper voice (_piper_voice, below).
+        while not _messages.empty():
+            try:
+                _messages.get_nowait()
+            except queue.Empty:
+                break
+        _messages.put(text)
+    elif ESPEAK:
         try:
-            if _voice is not None and _voice.poll() is None:
-                _voice.terminate()   # stop the previous message
             # "--" makes sure text that starts with "-" is read out, not
             # taken as an option.
-            _voice = subprocess.Popen(
-                [ESPEAK, "-a", str(TTS_VOLUME), "-s", str(TTS_SPEED), "--", text])
+            _player = subprocess.Popen(
+                [ESPEAK, "-a", str(ESPEAK_VOLUME), "-s", str(ESPEAK_SPEED), "--", text])
         except Exception as e:
             print(f"[TTS] Error: {e}")
-        return
+    else:
+        # Laptop: a brand-new pyttsx3 engine is made for every call,
+        # instead of reusing one. pyttsx3's Windows voice (SAPI5) has a
+        # known quirk where reusing one engine across multiple
+        # say()/runAndWait() calls in the same run often goes silent after
+        # the first utterance -- a fresh engine each time avoids that
+        # reliably. This one does hold up the screen until it has finished.
+        try:
+            engine = pyttsx3.init()
+            engine.say(text)
+            engine.runAndWait()
+            engine.stop()
+        except Exception as e:
+            print(f"[TTS] Error: {e}")
+
+
+def stop_speaking():
+    """Cuts off the message being spoken, if there is one."""
+    if _player is not None and _player.poll() is None:
+        _player.terminate()
+
+
+def _piper_voice():
+    """
+    Runs in the background for as long as the app is open (started by
+    start_voice). Loads the Piper voice once, which takes a few seconds,
+    then turns each message from speak() into sound and plays it.
+    """
+    global _player, _piper_ok
     try:
-        engine = pyttsx3.init()
-        engine.say(text)
-        engine.runAndWait()
-        engine.stop()
+        from piper import PiperVoice, SynthesisConfig
+        voice = PiperVoice.load(VOICE_FILE)
+        settings = SynthesisConfig(length_scale=VOICE_SPEED, volume=VOICE_VOLUME)
+        # A first practice run (not played), so the first real message
+        # comes out quicker.
+        list(voice.synthesize("Ready.", settings))
+        print(f"[TTS] Piper voice ready: {VOICE_NAME}")
     except Exception as e:
-        print(f"[TTS] Error: {e}")
+        print(f"[TTS] The Piper voice could not start ({e}), using espeak-ng instead")
+        _piper_ok = False
+        try:
+            speak(_messages.get_nowait())   # say a waiting message with espeak-ng
+        except queue.Empty:
+            pass
+        return
+
+    while True:
+        text = _messages.get()   # waits here until speak() hands over a message
+        try:
+            # Piper makes the sound one sentence at a time.
+            pieces = list(voice.synthesize(text, settings))
+        except Exception as e:
+            print(f"[TTS] Error: {e}")
+            continue
+        if not pieces or not _messages.empty():
+            continue   # nothing to say, or a newer message is waiting: say that one
+        sound = b"".join(piece.audio_int16_bytes for piece in pieces)
+        try:
+            # aplay plays the raw sound (16-bit, one channel, at the voice's
+            # sample rate), which is fed to it through a pipe.
+            _player = subprocess.Popen(
+                [APLAY, "-q", "-t", "raw", "-f", "S16_LE", "-c", "1",
+                 "-r", str(pieces[0].sample_rate), "-"],
+                stdin=subprocess.PIPE)
+            _player.stdin.write(sound)
+            _player.stdin.close()
+        except (BrokenPipeError, OSError):
+            pass   # cut off by a newer message (stop_speaking)
+
+
+def start_voice():
+    """Starts the Piper voice in the background, when it is set up."""
+    if _piper_ok:
+        threading.Thread(target=_piper_voice, daemon=True).start()
+    elif ESPEAK:
+        print("[TTS] Piper voice not set up, using espeak-ng")
 
 
 # The amplifier switches itself off when nothing has played for a few
@@ -203,7 +300,7 @@ def keep_speaker_awake():
     with the app, and then stops the silence ("kill").
     """
     global _awake
-    if not KEEP_SPEAKER_AWAKE or not ESPEAK or not shutil.which("aplay"):
+    if not KEEP_SPEAKER_AWAKE or not (USE_PIPER or ESPEAK) or not APLAY:
         return
     if _awake is not None:
         return   # already playing
@@ -1549,6 +1646,7 @@ class EyeGlyntApp(App):
     def build(self):
         self.title = "EyeGlynt"
         keep_speaker_awake()
+        start_voice()
         self.gaze_engine = GazeEngine()
         self.gaze_engine.start()
 
