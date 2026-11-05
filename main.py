@@ -104,7 +104,7 @@ Window.size = (SCREEN_W, SCREEN_H)
 # (29 October), 1.5 s and then 2 s were too quick. With the pointer
 # still off by a few centimetres, keys were selected before the user
 # could settle on the right one.
-DWELL_TIME = 4.0  # seconds
+DWELL_TIME = 3.0  # seconds
 
 # Gaze is never perfectly steady: the pointer jitters by a few millimetres
 # even when the eyes are still, and a blink can throw it off for a moment.
