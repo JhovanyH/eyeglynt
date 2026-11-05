@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Phrase library{% endblock %}
+{% block content %}
+<div class="stack">
+  <div>
+    <h1 style="margin:0;font-size:21px">Phrase library</h1>
+    <p style="margin:2px 0 0;color:var(--muted);font-size:14px">Quick-Fire buttons and Keyboard shorthand shown on the EyeGlynt device. Hidden phrases stay saved but don't appear on the device.</p>
+  </div>
+
+  <section class="card">
+    <h2 class="card-title"><svg class="icon"><use href="#i-plus"/></svg> Add a phrase</h2>
+    <form method="post" action="{{ url_for('phrases.add') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label class="field"><span>Category</span>
+        <select class="input" name="category_id" required>
+          {% for c in categories %}<option value="{{ c.category_id }}">{{ c.name }}{{ ' (Keyboard)' if c.kind == 'shorthand' }}</option>{% endfor %}
+        </select></label>
+      <div class="row-2" style="margin-top:12px">
+        <label class="field"><span>Button label</span><input class="input" name="label" maxlength="40" placeholder="e.g. Water" required></label>
+        <label class="field"><span>Spoken text</span><input class="input" name="spoken_text" maxlength="255" placeholder="e.g. I want water"></label>
+      </div>
+      <button class="btn btn-primary btn-block" style="margin-top:14px" type="submit">Add phrase</button>
+    </form>
+  </section>
+
+  {% for c in categories %}
+  <section class="card" id="cat-{{ c.category_id }}">
+    <h2 class="card-title">{{ c.name }}
+      <span class="aside">{{ 'Keyboard shorthand' if c.kind == 'shorthand' else 'Quick-Fire' }} · {{ by_cat[c.category_id]|length }}</span></h2>
+    {% if by_cat[c.category_id] %}
+    <ul class="log">
+      {% for p in by_cat[c.category_id] %}
+      <li style="grid-template-columns:1fr auto auto" class="{{ 'unintended' if not p.is_active }}">
+        <span class="txt"><strong>{{ p.label }}</strong>{% if p.spoken_text != p.label %} <span style="color:var(--muted)">— “{{ p.spoken_text }}”</span>{% endif %}</span>
+        <form method="post" action="{{ url_for('phrases.toggle', phrase_id=p.phrase_id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="btn btn-sm btn-ghost" type="submit">{{ 'Hide' if p.is_active else 'Show' }}</button></form>
+        <form method="post" action="{{ url_for('phrases.delete', phrase_id=p.phrase_id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="btn btn-sm btn-ghost" type="submit" title="Delete" aria-label="Delete {{ p.label }}"><svg class="icon"><use href="#i-trash"/></svg></button></form>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}<p class="empty" style="padding:8px">No phrases yet. Add the ones gathered from caregiver and therapist interviews.</p>{% endif %}
+  </section>
+  {% endfor %}
+</div>
+{% endblock %}

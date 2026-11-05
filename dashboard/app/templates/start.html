@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block title %}Start session{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Start a session</h1>
+  <p>Fill in the details to begin monitoring</p>
+</div>
+
+{% if not device.online %}
+<div class="notice warn" style="margin-top:12px">
+  <svg class="icon"><use href="#i-info"/></svg>
+  <span><strong>Device not responding.</strong> You can still start the session; activity will appear once the EyeGlynt device reconnects.</span>
+</div>
+{% endif %}
+
+<form method="post" class="stack" style="margin-top:12px" novalidate>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+  <section class="card">
+    <h2 class="card-title"><svg class="icon"><use href="#i-user"/></svg> Patient information</h2>
+    {% set researcher = current_user.is_researcher %}
+    {% set choice = form.get('patient_id', 'new' if not patients else patients[0].patient_id|string) %}
+    {% if not patients and not researcher %}
+    <p class="notice warn" style="margin:0">
+      <svg class="icon"><use href="#i-info"/></svg>
+      <span>No patient has been added yet. Ask the research team to add the patient before starting a session.</span>
+    </p>
+    {% elif patients %}
+    <label class="field {{ 'has-error' if errors.get('patient_id') }}">
+      <span>Patient</span>
+      <select class="input" name="patient_id" id="patient-select">
+        {% for p in patients %}
+        <option value="{{ p.patient_id }}" {{ 'selected' if choice == p.patient_id|string }}
+                data-profile="{{ p.has_profile }}" data-setting="{{ p.care_setting or '' }}">{{ p.full_name }} ({{ p.patient_code }})</option>
+        {% endfor %}
+        {% if researcher %}<option value="new" {{ 'selected' if choice == 'new' }}>+ New patient</option>{% endif %}
+      </select>
+      {% if errors.get('patient_id') %}<small class="field-error">{{ errors.patient_id }}</small>{% endif %}
+    </label>
+    {% else %}
+    <input type="hidden" name="patient_id" value="new">
+    {% endif %}
+
+    {% if researcher %}
+    <div id="new-patient" {% if patients and choice != 'new' %}hidden{% endif %} {% if patients %}style="margin-top:12px"{% endif %}>
+      <label class="field {{ 'has-error' if errors.get('patient_name') }}">
+        <span>Patient full name</span>
+        <input class="input" name="patient_name" value="{{ form.get('patient_name','') }}" autocomplete="off">
+        {% if errors.get('patient_name') %}<small class="field-error">{{ errors.patient_name }}</small>{% endif %}
+      </label>
+    </div>
+    {% endif %}
+
+    {% set chosen_p = patients|selectattr('patient_id', 'equalto', choice|int)|first if choice != 'new' and patients else none %}
+    {% if researcher %}
+    {% set cur_setting = form.get('care_setting') or (chosen_p.care_setting if chosen_p else '') %}
+    <label class="field {{ 'has-error' if errors.get('care_setting') }}" style="margin-top:12px">
+      <span>Care setting</span>
+      <select class="input" name="care_setting" id="setting-select" required>
+        <option value="" disabled {{ 'selected' if not cur_setting }}>Select setting</option>
+        {% for c in care_settings %}<option {{ 'selected' if cur_setting == c }}>{{ c }}</option>{% endfor %}
+      </select>
+      <small style="display:block;color:var(--muted);font-size:12px;margin-top:4px">Saved to the patient. Caregivers can't change it.</small>
+      {% if errors.get('care_setting') %}<small class="field-error">{{ errors.care_setting }}</small>{% endif %}
+    </label>
+    {% elif patients %}
+    <label class="field {{ 'has-error' if errors.get('care_setting') }}" style="margin-top:12px">
+      <span>Care setting</span>
+      <input class="input" id="setting-view" value="{{ (chosen_p.care_setting if chosen_p else '') or 'Not set yet' }}" readonly>
+      {% if errors.get('care_setting') %}<small class="field-error">{{ errors.care_setting }}</small>{% endif %}
+    </label>
+    {% endif %}
+    <p id="calib-hint" class="notice" style="margin:12px 0 0" hidden>
+      <svg class="icon"><use href="#i-info"/></svg>
+      <span>No calibration profile yet. The device will run the 5-point calibration first.</span>
+    </p>
+  </section>
+
+  <section class="card">
+    <h2 class="card-title"><svg class="icon"><use href="#i-user"/></svg> Caregiver information</h2>
+    <div class="row-2 stack-sm">
+      <label class="field"><span>Caregiver name</span><input class="input" value="{{ current_user.full_name }}" readonly></label>
+      <label class="field"><span>Role</span><input class="input" value="{{ current_user.role }}" readonly></label>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2 class="card-title"><svg class="icon"><use href="#i-gear"/></svg> Session settings</h2>
+    <label class="field">
+      <span>Dwell time</span>
+      <select class="input" name="dwell_time_ms">
+        {% for ms, label in dwell_options %}
+        <option value="{{ ms }}" {{ 'selected' if form.get('dwell_time_ms', '1500') == ms|string }}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    {% if current_user.is_researcher %}
+    <div class="field">
+      <span>Session mode</span>
+      <div class="segmented" role="radiogroup">
+        <input type="radio" id="mode-normal" name="mode" value="normal" {{ 'checked' if form.get('mode','normal') != 'test' }}>
+        <label for="mode-normal">Normal<small>Daily communication</small></label>
+        <input type="radio" id="mode-test" name="mode" value="test" {{ 'checked' if form.get('mode') == 'test' }}>
+        <label for="mode-test">Test<small>Formal evaluation</small></label>
+      </div>
+    </div>
+    {% endif %}
+    <label class="field">
+      <span>Session note (optional)</span>
+      <textarea class="input" name="notes" placeholder="e.g. Patient is fatigued today…">{{ form.get('notes','') }}</textarea>
+    </label>
+  </section>
+
+  <button class="btn btn-primary btn-block" type="submit" {{ 'disabled' if not patients and not current_user.is_researcher }}><svg class="icon"><use href="#i-play"/></svg> Start session</button>
+
+  <div class="notice">
+    <svg class="icon"><use href="#i-info"/></svg>
+    <span>The patient can keep communicating on the EyeGlynt device while you fill in this form.</span>
+  </div>
+</form>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  const sel = document.getElementById('patient-select');
+  const box = document.getElementById('new-patient');
+  const hint = document.getElementById('calib-hint');
+  const settingSel = document.getElementById('setting-select');   // researchers
+  const settingView = document.getElementById('setting-view');    // caregivers (read-only)
+  function sync(changed) {
+    const isNew = !sel || sel.value === 'new';
+    if (box) box.hidden = !isNew;
+    const opt = sel && sel.selectedOptions[0];
+    hint.hidden = !(isNew || (opt && opt.dataset.profile === '0'));
+    const saved = (opt && !isNew) ? opt.dataset.setting : '';
+    if (settingView) settingView.value = saved || 'Not set yet';
+    if (settingSel && changed) settingSel.value = saved;
+  }
+  if (sel) sel.addEventListener('change', () => sync(true));
+  sync(false);
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Not available{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Not available for this account</h1>
+  <p>This page is only for the research team.</p></div>
+<div style="text-align:center;margin-top:16px">
+  <a class="btn" href="{{ url_for('sessions.home') }}">Back to the dashboard</a>
+</div>
+{% endblock %}

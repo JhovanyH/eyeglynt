@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Device busy{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Research session in progress</h1></div>
+<section class="card" style="margin-top:12px;text-align:center">
+  <p style="margin:0 0 14px">The research team is running an evaluation test on the EyeGlynt device right now.
+     You can start monitoring as soon as it ends.</p>
+  <a class="btn btn-block" href="{{ url_for('sessions.home') }}"><svg class="icon"><use href="#i-refresh"/></svg> Check again</a>
+</section>
+{% endblock %}

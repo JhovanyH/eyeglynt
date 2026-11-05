@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Create account' if tab == 'register' else 'Log in' }}{% endblock %}
+{% macro field(name, label, type='text', placeholder='', autocomplete='') -%}
+  <label class="field {{ 'has-error' if errors.get(name) }}">
+    <span>{{ label }}</span>
+    {% if type == 'password' %}<span class="pw-wrap">{% endif %}
+    <input class="input" type="{{ type }}" name="{{ name }}" placeholder="{{ placeholder }}"
+           {% if type != 'password' %}value="{{ form.get(name, '') }}"{% endif %}
+           {% if autocomplete %}autocomplete="{{ autocomplete }}"{% endif %} required>
+    {% if type == 'password' %}<button type="button" class="pw-toggle" aria-label="Show password"><svg class="icon"><use href="#i-eye"/></svg></button></span>{% endif %}
+    {% if errors.get(name) %}<small class="field-error">{{ errors[name] }}</small>{% endif %}
+  </label>
+{%- endmacro %}
+{% block content %}
+<div class="page-head">
+  <h1><svg class="icon brand-eye"><use href="#i-eye"/></svg> EyeGlynt Caregiver Dashboard</h1>
+</div>
+
+<section class="card" style="margin-top:12px">
+  <nav class="auth-tabs" aria-label="Account">
+    <a href="{{ url_for('auth.login') }}" class="{{ 'active' if tab == 'login' }}">Log in</a>
+    <a href="{{ url_for('auth.register') }}" class="{{ 'active' if tab == 'register' }}">Register</a>
+  </nav>
+
+  {% if tab == 'login' %}
+  <form method="post" novalidate autocomplete="off">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {{ field('username', 'Username', autocomplete='off') }}
+    {{ field('password', 'Password', type='password', autocomplete='off') }}
+    <label class="check" style="margin:12px 0 16px"><input type="checkbox" name="remember" value="1"> Keep me logged in on this device</label>
+    <button class="btn btn-primary btn-block" type="submit">Log in</button>
+  </form>
+  {% else %}
+  <form method="post" novalidate autocomplete="off">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="section-label">Personal information</div>
+    <div class="row-2">
+      {{ field('first_name', 'First name', autocomplete='off') }}
+      {{ field('last_name', 'Last name', autocomplete='off') }}
+    </div>
+    <label class="field {{ 'has-error' if errors.get('role') }}" style="margin-top:12px">
+      <span>Role</span>
+      <select class="input" name="role" required>
+        <option value="" disabled {{ 'selected' if not form.get('role') }}>Select role</option>
+        {% for r in roles %}<option {{ 'selected' if form.get('role') == r }}>{{ r }}</option>{% endfor %}
+      </select>
+      {% if errors.get('role') %}<small class="field-error">{{ errors.role }}</small>{% endif %}
+    </label>
+    <div style="margin-top:12px">{{ field('contact_number', 'Contact number', type='tel', placeholder='09XXXXXXXXX', autocomplete='off') }}</div>
+    <div id="access-code" {% if form.get('role') != 'Researcher' %}hidden{% endif %} style="margin-top:12px">
+      <label class="field {{ 'has-error' if errors.get('access_code') }}">
+        <span>Researcher access code</span>
+        <input class="input" type="password" name="access_code" autocomplete="off" placeholder="Given by the research team">
+        {% if errors.get('access_code') %}<small class="field-error">{{ errors.access_code }}</small>{% endif %}
+      </label>
+      <p style="font-size:12px;color:var(--muted);margin:6px 2px 0">Researcher accounts can run Test Mode and see the full performance report.</p>
+    </div>
+
+    <div class="section-label">Login credentials</div>
+    {{ field('username', 'Username', placeholder='3–40 letters or numbers', autocomplete='off') }}
+    <div class="row-2" style="margin-top:12px">
+      {{ field('password', 'Password', type='password', placeholder='8+ characters', autocomplete='off') }}
+      {{ field('confirm', 'Confirm password', type='password', autocomplete='off') }}
+    </div>
+    <button class="btn btn-primary btn-block" type="submit" style="margin-top:18px">Create account</button>
+  </form>
+  {% endif %}
+</section>
+
+<div class="notice" style="margin-top:12px">
+  <svg class="icon"><use href="#i-info"/></svg>
+  <span>Session records are stored locally on the EyeGlynt device and are only accessible through registered caregiver accounts.</span>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  const role = document.querySelector('select[name=role]');
+  const box = document.getElementById('access-code');
+  if (!role || !box) return;
+  role.addEventListener('change', () => { box.hidden = role.value !== 'Researcher'; });
+})();
+</script>
+{% endblock %}

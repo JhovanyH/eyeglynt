@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Session history{% endblock %}
+{% block wrap_class %}wide{% endblock %}
+{% macro num(row, key, unit) -%}
+  {% set v = row[key] %}
+  <td class="num {{ row.checks.get(key, '') }}">{% if v is none %}—{% else %}{{ v|round|int }}{{ unit }}{% endif %}</td>
+{%- endmacro %}
+{% block content %}
+<div class="stack">
+  <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:end;justify-content:space-between">
+        <div><h1 style="margin:0;font-size:21px">Session history</h1></div>
+    <form method="get" style="min-width:220px">
+      <select class="input" name="patient" onchange="this.form.submit()" aria-label="Filter by patient">
+        <option value="">All patients</option>
+        {% for p in patients %}<option value="{{ p.patient_id }}" {{ 'selected' if patient_id == p.patient_id }}>{{ p.full_name }} ({{ p.patient_code }})</option>{% endfor %}
+      </select>
+    </form>
+  </div>
+
+  <section class="card">
+    {% if rows %}
+    <div class="table-wrap">
+      <table class="data" {% if not detailed %}style="min-width:480px"{% endif %}>
+        <thead><tr>
+          <th>Session</th><th>Patient</th><th>Date</th><th>Duration</th>{% if detailed %}<th>Mode</th>{% endif %}
+          <th class="num">Selections</th>
+          {% if detailed %}<th class="num">Accuracy</th><th class="num">FPR</th>
+          <th class="num">Latency</th><th class="num">Recal.</th>{% endif %}
+        </tr></thead>
+        <tbody>
+        {% for r in rows %}
+          <tr>
+            <td><a href="{{ url_for('sessions.summary' if r.status == 'ended' else 'sessions.live', session_id=r.session_id) }}">{{ r.session_code }}</a>
+              {% if r.status == 'active' %}<span class="live-badge" style="font-size:11px;padding:2px 8px">Live</span>{% endif %}</td>
+            <td>{{ r.patient_name }}</td>
+            <td>{{ r.started_at|date }}</td>
+            <td class="tabular">{{ r.duration_s|duration }}</td>
+            {% if detailed %}<td><span class="pill {{ 'kb' if r.mode == 'test' else 'muted' }}">{{ r.mode|capitalize }}</span></td>{% endif %}
+            <td class="num">{{ r.total_selections if r.total_selections is not none else '—' }}</td>
+            {% if detailed %}
+            {{ num(r, 'gaze_accuracy_pct', '%') }}
+            {{ num(r, 'false_positive_pct', '%') }}
+            {{ num(r, 'avg_detection_latency_ms', ' ms') }}
+            {{ num(r, 'recalibration_success_pct', '%') }}
+            {% endif %}
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="empty">No sessions yet. <a href="{{ url_for('sessions.start') }}">Start the first one</a>.</p>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

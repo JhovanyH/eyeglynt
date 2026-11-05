@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+{% block title %}Summary · {{ s.session_code }}{% endblock %}
+{% block wrap_class %}{{ 'wide' if detailed }}{% endblock %}
+
+{% macro metric_tile(key, value, unit, sub) -%}
+  {% set c = checks.get(key, 'na') %}
+  <div class="tile {{ c if c != 'na' }}">
+    <div class="k">{{ benchmarks[key].label }}</div>
+    <div class="v">{% if value is none %}—{% else %}{{ value|round|int }}<small>{{ unit }}</small>{% endif %}</div>
+    <div class="sub">{{ sub }} · {{ benchmarks[key].target }}</div>
+    {% if c == 'pass' %}<span class="status ok" title="Meets benchmark" aria-label="Meets benchmark">✓</span>{% elif c == 'fail' %}<span class="status bad" title="Below benchmark" aria-label="Below benchmark">!</span>{% endif %}
+  </div>
+{%- endmacro %}
+
+{% macro most_used_tile() -%}
+  {% set most = m.most_used_interface %}
+  <div class="tile accent {{ 'kb' if most == 'keyboard' }}">
+    <div class="k">Interface most used</div>
+    <div class="v" style="font-size:24px">{{ {'keyboard':'Keyboard','quickfire':'Quick-Fire'}.get(most, '—') }}</div>
+    <div class="sub">{% if most %}{{ m.keyboard_selections if most == 'keyboard' else m.quickfire_selections }}/{{ m.total_selections }} selections{% else %}No selections{% endif %}</div>
+  </div>
+{%- endmacro %}
+
+{% macro total_tile() -%}
+  <div class="tile">
+    <div class="k">Total selections</div>
+    <div class="v">{{ m.total_selections }}</div>
+    <div class="sub">This session</div>
+  </div>
+{%- endmacro %}
+
+{% macro activity_card(show_test_marks) -%}
+  <section class="card">
+    <h2 class="card-title"><svg class="icon"><use href="#i-list"/></svg> Activity log <span class="aside">{{ selections|length }} selections</span></h2>
+    {% if selections %}
+    <div class="log-scroll">
+      <ul class="log">
+        {% for r in selections %}
+        <li class="{{ 'unintended' if r.intent_status == 'unintended' }}" style="grid-template-columns:auto auto 1fr">
+          <span class="t">{{ r.selected_at|hms }}</span>
+          <span class="pill {{ 'qf' if r.interface == 'quickfire' else 'kb' }}">{{ 'Quick-Fire' if r.interface == 'quickfire' else 'Keyboard' }}</span>
+          <span class="txt">{{ r.output_text }}
+            {% if show_test_marks and r.target_element_id is not none %}<span class="tag pill {{ 'ok' if r.is_correct else 'bad' }}">{{ '✓ target' if r.is_correct else '✗ missed' }}</span>{% endif %}
+            {% if r.intent_status == 'unintended' %}<span class="tag pill bad">not intended</span>{% endif %}
+          </span>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% else %}<p class="empty">No selections were recorded in this session.</p>{% endif %}
+  </section>
+{%- endmacro %}
+
+{% macro notes_card() -%}
+  <section class="card">
+    <h2 class="card-title"><svg class="icon"><use href="#i-clip"/></svg> Caregiver notes</h2>
+    {% if s.pre_session_notes %}
+    <p style="margin:0 0 10px;font-size:14px"><span style="color:var(--muted)">Before session:</span> {{ s.pre_session_notes }}</p>
+    {% endif %}
+    <form method="post" action="{{ url_for('sessions.save_notes', session_id=s.session_id) }}" id="notes-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label class="field"><span class="sr-only">Notes about this session</span>
+        <textarea class="input" name="post_session_notes" placeholder="Add notes about this session…">{{ s.post_session_notes or '' }}</textarea>
+      </label>
+    </form>
+    <div class="btn-row" style="margin-top:12px">
+      <a class="btn" href="{{ url_for('sessions.summary_pdf', session_id=s.session_id) }}"><svg class="icon"><use href="#i-download"/></svg> Export PDF</a>
+      <button class="btn btn-primary" type="submit" form="notes-form"><svg class="icon"><use href="#i-save"/></svg> Save notes</button>
+    </div>
+    {% if detailed %}
+    <p style="font-size:12px;color:var(--muted);margin:10px 0 0;text-align:center">
+      Need it anonymised for the thesis? <a href="{{ url_for('sessions.summary_pdf', session_id=s.session_id, anon=1) }}">Export with patient code only</a>
+    </p>
+    {% endif %}
+  </section>
+{%- endmacro %}
+
+{% block content %}
+<div class="stack">
+  {% if just_ended %}
+  <div class="banner-ended" role="status">
+    <span class="check-circle"><svg class="icon"><use href="#i-check"/></svg></span>
+    <div><strong>Session ended successfully</strong><span>Saved to database · {{ s.ended_at|date }}</span></div>
+  </div>
+  {% endif %}
+
+{% if not detailed %}
+  {# ===================== CAREGIVER VIEW (matches the thesis mockup) ===================== #}
+  <section class="card">
+    <h2 class="card-title" style="justify-content:center"><svg class="icon"><use href="#i-user"/></svg> Patient information</h2>
+    <table class="kv">
+      <tr><th>Name</th><td>{{ s.patient_name }}</td></tr>
+      <tr><th>Date</th><td>{{ s.started_at|date }}</td></tr>
+      <tr><th>Start time</th><td class="tabular">{{ s.started_at|hm }}</td></tr>
+      <tr><th>End time</th><td class="tabular">{{ s.ended_at|hm }}</td></tr>
+      <tr><th>Duration</th><td class="tabular">{{ s.duration_s|duration }}</td></tr>
+    </table>
+  </section>
+
+  <div class="tiles">
+    {{ most_used_tile() }}
+    {{ total_tile() }}
+  </div>
+
+  {{ activity_card(False) }}
+  {{ notes_card() }}
+
+{% else %}
+  {# ===================== RESEARCHER VIEW (full report) ===================== #}
+  <div class="summary-grid stack">
+    <section class="card">
+      <h2 class="card-title"><svg class="icon"><use href="#i-user"/></svg> Patient information
+        <span class="aside">{{ s.session_code }} · {{ 'Test Mode' if s.mode == 'test' else 'Normal Mode' }}</span></h2>
+      <table class="kv">
+        <tr><th>Name</th><td>{{ s.patient_name }} <span class="pill muted">{{ s.patient_code }}</span></td></tr>
+        <tr><th>Care setting</th><td>{{ s.care_setting }}</td></tr>
+        <tr><th>Caregiver</th><td>{{ s.cg_first }} {{ s.cg_last }}</td></tr>
+        <tr><th>Date</th><td>{{ s.started_at|date }}</td></tr>
+        <tr><th>Start time</th><td class="tabular">{{ s.started_at|hm }}</td></tr>
+        <tr><th>End time</th><td class="tabular">{{ s.ended_at|hm }}</td></tr>
+        <tr><th>Duration</th><td class="tabular">{{ s.duration_s|duration }}</td></tr>
+        <tr><th>Dwell time</th><td>{{ '%.1f'|format(s.dwell_time_ms / 1000) }} s</td></tr>
+      </table>
+    </section>
+
+    <section>
+      <div class="tiles">
+        {{ metric_tile('gaze_accuracy_pct', m.gaze_accuracy_pct, '%',
+             (m.accuracy_trials ~ ' test trials') if s.mode == 'test' else 'Unflagged selections') }}
+        {{ total_tile() }}
+        {{ metric_tile('avg_detection_latency_ms', m.avg_detection_latency_ms, 'ms', m.latency_events ~ ' events') }}
+        {{ metric_tile('recalibration_success_pct', m.recalibration_success_pct, '%', m.recalibration_attempts ~ ' recalibrations') }}
+        {{ metric_tile('false_positive_pct', m.false_positive_pct, '%', m.unintended_selections ~ ' unintended') }}
+        {{ most_used_tile() }}
+      </div>
+      <p style="font-size:12px;color:var(--muted);margin:8px 2px 0">
+        {% if s.mode == 'test' %}Accuracy = correct ÷ trials in accuracy tests. False positives include all free-look activations.
+        {% else %}Normal Mode: accuracy counts every selection as intended unless a caregiver flagged it. Use Test Mode for thesis benchmarks.{% endif %}
+      </p>
+    </section>
+  </div>
+
+  <div class="summary-grid stack">
+    {{ activity_card(True) }}
+    <div class="stack">
+      <section class="card">
+        <h2 class="card-title"><svg class="icon"><use href="#i-bell"/></svg> System alerts <span class="aside">{{ alerts|length }}</span></h2>
+        {% if alerts %}
+        <ul class="log alerts">
+          {% for a in alerts %}
+          <li><div><div class="a-title">{{ alert_labels.get(a.alert_type, a.alert_type) }}</div>
+                   <div class="a-msg">{{ a.message }}{% if a.detection_latency_ms is not none %} · {{ a.detection_latency_ms }} ms{% endif %}</div></div>
+              <span class="t">{{ a.detected_at|hms }}</span></li>
+          {% endfor %}
+        </ul>
+        {% else %}<p class="empty">No alerts were raised.</p>{% endif %}
+      </section>
+      {{ notes_card() }}
+    </div>
+  </div>
+{% endif %}
+
+  <div class="no-print" style="text-align:center">
+    <a class="btn" href="{{ url_for('sessions.start') }}"><svg class="icon"><use href="#i-play"/></svg> Start a new session</a>
+  </div>
+</div>
+{% endblock %}
