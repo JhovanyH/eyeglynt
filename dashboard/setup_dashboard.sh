@@ -11,6 +11,7 @@
 #   3. makes random passwords and writes them into dashboard/.env
 #   4. installs the dashboard's Python packages into dashboard/venv
 #   5. makes the dashboard start by itself every time the Pi turns on
+#   6. lets the EyeGlynt app (main.py) talk to the database (pymysql)
 # =====================================================================
 set -e
 
@@ -20,13 +21,13 @@ cd "$DASH"
 echo "Dashboard folder: $DASH"
 
 echo
-echo "== Step 1 of 5: installing MariaDB and Python venv (needs internet, takes a few minutes) =="
+echo "== Step 1 of 6: installing MariaDB and Python venv (needs internet, takes a few minutes) =="
 sudo apt update
 sudo apt install -y mariadb-server python3-venv
 sudo systemctl enable --now mariadb
 
 echo
-echo "== Step 2 of 5: creating the database =="
+echo "== Step 2 of 6: creating the database =="
 if sudo mariadb -e "USE eyeglynt; SELECT 1 FROM caregivers LIMIT 1;" >/dev/null 2>&1; then
     echo "The eyeglynt database is already there. Keeping it (no data is deleted)."
 else
@@ -36,7 +37,7 @@ fi
 sudo mariadb < database/seed.sql
 
 echo
-echo "== Step 3 of 5: passwords (.env file) =="
+echo "== Step 3 of 6: passwords (.env file) =="
 if [ ! -f .env ]; then
     cp .env.example .env
     SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
@@ -58,7 +59,7 @@ sudo mariadb -e "ALTER USER 'eyeglynt_web'@'localhost' IDENTIFIED BY '$WEBPW'; A
 echo "Database accounts ready."
 
 echo
-echo "== Step 4 of 5: installing the dashboard's Python packages (takes a few minutes) =="
+echo "== Step 4 of 6: installing the dashboard's Python packages (takes a few minutes) =="
 if [ ! -x venv/bin/python ]; then
     python3 -m venv venv
 fi
@@ -66,7 +67,7 @@ venv/bin/pip install -q -r requirements.txt
 venv/bin/python tools/check_db.py
 
 echo
-echo "== Step 5 of 5: start the dashboard automatically when the Pi turns on =="
+echo "== Step 5 of 6: start the dashboard automatically when the Pi turns on =="
 sudo tee /etc/systemd/system/eyeglynt-dashboard.service >/dev/null <<SERVICE
 [Unit]
 Description=EyeGlynt Caregiver Dashboard
@@ -84,6 +85,17 @@ SERVICE
 sudo systemctl daemon-reload
 sudo systemctl enable eyeglynt-dashboard
 sudo systemctl restart eyeglynt-dashboard
+
+echo
+echo "== Step 6 of 6: connect the EyeGlynt app to the dashboard =="
+# main.py runs in ~/eyeglynt_env and needs pymysql to reach the database
+# (see dashboard_link.py in the eyeglynt folder).
+if [ -x "$HOME/eyeglynt_env/bin/pip" ]; then
+    "$HOME/eyeglynt_env/bin/pip" install -q pymysql
+    echo "The EyeGlynt app can now reach the dashboard."
+else
+    echo "No ~/eyeglynt_env found. Later, run: <your venv>/bin/pip install pymysql"
+fi
 sleep 3
 
 echo

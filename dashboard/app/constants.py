@@ -10,13 +10,18 @@ ROLES = [
 
 CARE_SETTINGS = ["Home", "Hospital", "Rehabilitation / Therapy Center", "Long-term Care Facility", "Other"]
 
-# (milliseconds, label)
+# (milliseconds, label). The device uses the dwell time chosen here for the
+# whole session. The default is the device's own DWELL_TIME (main.py): in
+# testing, 1.5 s and 2 s were too quick for the gaze pointer's accuracy.
 DWELL_OPTIONS = [
-    (1500, "1.5 seconds (default)"),
+    (1500, "1.5 seconds"),
     (2000, "2.0 seconds"),
     (2500, "2.5 seconds"),
-    (3000, "3.0 seconds"),
+    (3000, "3.0 seconds (default)"),
+    (3500, "3.5 seconds"),
+    (4000, "4.0 seconds"),
 ]
+DEFAULT_DWELL_MS = 3000
 
 # Thesis Table 7 — Performance Benchmarks
 BENCHMARKS = {
