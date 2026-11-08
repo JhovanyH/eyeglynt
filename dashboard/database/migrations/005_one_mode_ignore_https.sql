@@ -5,7 +5,7 @@
 --
 -- Safe to run more than once. No data is deleted. On the Pi it is run
 -- for you by setup_dashboard.sh. By hand:
---     sudo mariadb eyeglynt < ~/eyeglynt/dashboard/database/migrations/005_one_mode_ignore.sql
+--     sudo mariadb eyeglynt < ~/eyeglynt/dashboard/database/migrations/005_one_mode_ignore_https.sql
 -- In HeidiSQL: open this file in a Query tab and press F9.
 -- Fresh installs from the current schema.sql already include all of this.
 -- =====================================================================

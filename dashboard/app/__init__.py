@@ -29,6 +29,10 @@ def create_app(test_config=None):
         RESEARCHER_ACCESS_CODE=os.getenv("RESEARCHER_ACCESS_CODE", ""),
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
+        # The dashboard runs on HTTPS (see setup_dashboard.sh and run.py), so
+        # the login cookies are only ever sent over the encrypted connection.
+        SESSION_COOKIE_SECURE=os.getenv("HTTPS", "1") != "0",
+        REMEMBER_COOKIE_SECURE=os.getenv("HTTPS", "1") != "0",
         REMEMBER_COOKIE_HTTPONLY=True,
         PERMANENT_SESSION_LIFETIME=timedelta(hours=12),
     )

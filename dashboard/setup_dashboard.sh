@@ -10,7 +10,8 @@
 #   2. creates the "eyeglynt" database and its tables
 #   3. makes random passwords and writes them into dashboard/.env
 #   4. installs the dashboard's Python packages into dashboard/venv
-#   5. makes the dashboard start by itself every time the Pi turns on
+#   5. makes a security certificate (HTTPS) and makes the dashboard start
+#      by itself every time the Pi turns on
 #   6. lets the EyeGlynt app (main.py) talk to the database (pymysql)
 # =====================================================================
 set -e
@@ -35,7 +36,7 @@ else
     echo "Database and tables created."
 fi
 # Updates for a database made by an older version (safe to run every time).
-sudo mariadb < database/migrations/005_one_mode_ignore.sql
+sudo mariadb < database/migrations/005_one_mode_ignore_https.sql
 echo "Database is up to date."
 sudo mariadb < database/seed.sql
 
@@ -70,7 +71,24 @@ venv/bin/pip install -q -r requirements.txt
 venv/bin/python tools/check_db.py
 
 echo
-echo "== Step 5 of 6: start the dashboard automatically when the Pi turns on =="
+echo "== Step 5 of 6: HTTPS certificate, and start the dashboard automatically =="
+# A self-made certificate, so phones talk to the dashboard over an encrypted
+# connection (https). Browsers warn about it once ("not private"): choose
+# Advanced, then Proceed / Continue.
+if [ ! -f certs/cert.pem ] || [ ! -f certs/key.pem ]; then
+    mkdir -p certs
+    SAN="DNS:localhost,DNS:$(hostname).local,IP:127.0.0.1"
+    for ip in $(hostname -I); do
+        case "$ip" in *:*) ;; *) SAN="$SAN,IP:$ip" ;; esac
+    done
+    openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+        -keyout certs/key.pem -out certs/cert.pem \
+        -subj "/CN=EyeGlynt Dashboard" -addext "subjectAltName=$SAN" 2>/dev/null
+    chmod 600 certs/key.pem
+    echo "Made a new HTTPS certificate."
+else
+    echo "Keeping the HTTPS certificate that is already there."
+fi
 sudo tee /etc/systemd/system/eyeglynt-dashboard.service >/dev/null <<SERVICE
 [Unit]
 Description=EyeGlynt Caregiver Dashboard
@@ -79,7 +97,7 @@ After=network.target mariadb.service
 [Service]
 User=$USER
 WorkingDirectory=$DASH
-ExecStart=$DASH/venv/bin/gunicorn -w 2 -b 0.0.0.0:5000 run:app
+ExecStart=$DASH/venv/bin/gunicorn -w 2 -b 0.0.0.0:5000 --certfile $DASH/certs/cert.pem --keyfile $DASH/certs/key.pem run:app
 Restart=always
 
 [Install]
@@ -102,13 +120,15 @@ fi
 sleep 3
 
 echo
-if curl -s -o /dev/null http://localhost:5000/; then
+if curl -sk -o /dev/null https://localhost:5000/; then
     echo "DONE. The dashboard is running."
 else
     echo "The dashboard did not answer yet. Send a screenshot of this window to Claude."
 fi
 echo "Open it on a phone or laptop on the SAME Wi-Fi as the Pi:"
 for ip in $(hostname -I); do
-    case "$ip" in *:*) ;; *) echo "    http://$ip:5000" ;; esac
+    case "$ip" in *:*) ;; *) echo "    https://$ip:5000" ;; esac
 done
-echo "    or http://$(hostname).local:5000"
+echo "    or https://$(hostname).local:5000"
+echo "(https, not http. The first time, the browser warns that the connection"
+echo " is not private: tap Advanced, then Proceed. It is your own Pi.)"
