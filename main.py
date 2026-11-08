@@ -21,12 +21,14 @@ RUN
 
 import csv
 import importlib.util
+import json
 import os
 import queue
 import shutil
 import subprocess
 import threading
 import time
+import zlib
 
 import numpy as np
 
@@ -1334,10 +1336,40 @@ ACCURACY_TEST_POINTS = [
 # test dot are printed in the terminal, and saved in the CSV file.
 GOOD_CM = 1.5
 OK_CM = 2.5
+# EYE PICTURES (for testing): during calibration and the accuracy test,
+# EYE_PICTURES_PER_DOT pictures of both eyes are saved at each dot, at the
+# camera's full detail, together with the face landmarks and where the
+# dot was. They go in a folder next to the CSV file (same name, ending in
+# "_eyes"). With them, the eye measurements can be checked and improved
+# on real eyes, away from the Pi. They are pictures of a person's eyes,
+# so set SAVE_EYE_PICTURES to False for the real user sessions (Data
+# Privacy Act), unless the participant agreed to it.
+SAVE_EYE_PICTURES = True
+EYE_PICTURES_PER_DOT = 6
 LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
 
 GREEN_TEXT = rgb(120, 220, 120)  # "Face detected"
 RED_TEXT = rgb(255, 120, 120)    # "Face not detected"
+
+
+def save_gray_png(filename, image):
+    """Saves a grayscale numpy picture (whole numbers 0-255) as a PNG file
+    with only Python's own zlib (no extra library needed). A PNG file is
+    a signature and three parts: IHDR (size; 8 bits, colour type 0 =
+    grayscale), IDAT (the compressed rows, each starting with a 0 byte =
+    "no filter") and IEND (the end). Each part is its length, its name,
+    its data and a checksum."""
+    height, width = image.shape
+
+    def part(name, data):
+        return (len(data).to_bytes(4, "big") + name + data
+                + zlib.crc32(name + data).to_bytes(4, "big"))
+
+    rows = b"".join(b"\x00" + image[y].tobytes() for y in range(height))
+    header = width.to_bytes(4, "big") + height.to_bytes(4, "big") + bytes([8, 0, 0, 0, 0])
+    with open(filename, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n" + part(b"IHDR", header)
+                + part(b"IDAT", zlib.compress(rows)) + part(b"IEND", b""))
 
 
 class CalibrationScreen(Screen):
@@ -1357,6 +1389,8 @@ class CalibrationScreen(Screen):
         self._preview_event = None
         self._countdown_event = None
         self._leaving = False          # True once we've decided to leave
+        self.eye_pictures = []         # see SAVE_EYE_PICTURES: (stage, dot, dot x, dot y, seconds, picture)
+        self._last_picture_number = None
 
         # Instructions at the top of the screen. Its height changes per
         # stage, so it never covers the preview or the dots.
@@ -1411,6 +1445,10 @@ class CalibrationScreen(Screen):
         self.stage = "ready"
         self._leaving = False
         self.dot.pos = (-100, -100)
+        self.eye_pictures = []
+        # Sharpen the camera picture for where the user sits now (see
+        # AUTOFOCUS in gaze_engine.py), so the preview is sharp too.
+        self.gaze_engine.request_focus()
         self._place_label("top", 22, 0.2)
         self.instruction_label.text = (
             "Get ready for calibration\n"
@@ -1489,6 +1527,8 @@ class CalibrationScreen(Screen):
         if self.stage != "ready":
             return  # already started (e.g. tapped and dwelled at the same time)
         self.stage = "countdown"
+        # The user is now in place: focus once more during the countdown.
+        self.gaze_engine.request_focus()
         self._stop_preview()
         self.remove_widget(self.start_btn)
         self.preview_image.opacity = 0   # hide the preview from now on
@@ -1534,6 +1574,7 @@ class CalibrationScreen(Screen):
         self.samples_iy = []   # iy readings (up/down, iris against the eye corners)
         self.samples_hx = []   # hx readings (left/right, glints), only when a glint is seen
         self.pointer_samples = []  # accuracy test: where the gaze pointer was
+        self._pictures_at_dot = 0  # eye pictures kept at this dot (SAVE_EYE_PICTURES)
         self._target_start_time = time.time()
         self._sample_event = Clock.schedule_interval(self._collect_sample, 1 / 30)
         Clock.schedule_once(self._finish_current_target, CALIBRATION_CAPTURE_TIME)
@@ -1543,6 +1584,8 @@ class CalibrationScreen(Screen):
         elapsed = time.time() - self._target_start_time
         pointer = (self.gaze_engine.get_screen_x(), self.gaze_engine.get_screen_y())
         self._log(elapsed, feature, pointer)
+        if elapsed >= CALIBRATION_SETTLE_TIME:
+            self._keep_eye_picture(elapsed)
         if self.stage == "test":
             if elapsed >= CALIBRATION_SETTLE_TIME:
                 self.pointer_samples.append(pointer)
@@ -1566,6 +1609,21 @@ class CalibrationScreen(Screen):
             f"{remaining:.1f}s  --  [{face_status}]"
         )
 
+    def _keep_eye_picture(self, elapsed):
+        """Keeps a picture of the eyes at this dot (see SAVE_EYE_PICTURES),
+        up to EYE_PICTURES_PER_DOT, each from a different camera picture.
+        They are written to files at the end (_save_eye_pictures)."""
+        if not SAVE_EYE_PICTURES or self._pictures_at_dot >= EYE_PICTURES_PER_DOT:
+            return
+        picture = self.gaze_engine.get_eye_picture()
+        if picture is None or picture[0] == self._last_picture_number:
+            return   # no face, or the same camera picture as last time
+        self._last_picture_number = picture[0]
+        self._pictures_at_dot += 1
+        target_x, target_y = self.current_target_px
+        self.eye_pictures.append((self.stage, self.target_index + 1, round(target_x), round(target_y),
+                                  round(elapsed, 3), picture))
+
     def _log(self, elapsed, feature, pointer):
         """Keeps one reading for the CSV file (see RUN_ACCURACY_TEST)."""
         def rounded(value, digits):
@@ -1581,7 +1639,8 @@ class CalibrationScreen(Screen):
                              + [rounded(v, 5) for v in (fx, vy, iy, hx)]
                              + [rounded(pointer[0], 1), rounded(pointer[1], 1),
                                 rounded(self.gaze_engine.get_fps(), 1)]
-                             + [rounded(v, 2) for v in (turn, tilt, head_x, head_y)])
+                             + [rounded(v, 2) for v in (turn, tilt, head_x, head_y)]
+                             + [rounded(self.gaze_engine.get_focus_distance_cm(), 1)])
 
     def _finish_current_target(self, dt):
         if self._sample_event is not None:
@@ -1692,7 +1751,9 @@ class CalibrationScreen(Screen):
         self._place_label("center", 24, 0.8)
         fps = self.gaze_engine.get_fps()
         saved = self._save_log()
+        distance = self.gaze_engine.get_focus_distance_cm()
         details = [f"camera {fps:.0f} pictures a second" if fps is not None else "",
+                   f"face {distance:.0f} cm from the camera" if distance is not None else "",
                    f"saved to {saved}" if saved else ""]
         details = ", ".join(d for d in details if d)
         self.instruction_label.text = self.summary + (f"\n({details})" if details else "")
@@ -1710,12 +1771,41 @@ class CalibrationScreen(Screen):
                 writer = csv.writer(f)
                 writer.writerow(["stage", "dot", "dot_x", "dot_y", "seconds",
                                  "fx", "vy", "iy", "hx", "pointer_x", "pointer_y", "camera_fps",
-                                 "head_turn_deg", "head_tilt_deg", "head_x", "head_y"])
+                                 "head_turn_deg", "head_tilt_deg", "head_x", "head_y", "focus_cm"])
                 writer.writerows(self.log_rows)
+            self._save_eye_pictures(os.path.join(LOG_DIR, name[:-4] + "_eyes"))
             return f"logs/{name}"
         except OSError as e:
             print(f"[Calibration] Could not save the readings: {e}")
             return ""
+
+    def _save_eye_pictures(self, folder):
+        """Writes the eye pictures (see SAVE_EYE_PICTURES) into `folder`:
+        one PNG file per picture, and pictures.jsonl with one line per
+        picture: its file, the stage, the dot and its position on the
+        screen, the seconds since the dot appeared, where the picture's
+        top-left corner is in the camera picture, and the 478 face
+        landmarks (camera-picture pixels). The first line describes the
+        camera."""
+        if not self.eye_pictures:
+            return
+        try:
+            os.makedirs(folder, exist_ok=True)
+            with open(os.path.join(folder, "pictures.jsonl"), "w") as index:
+                index.write(json.dumps({"camera": self.gaze_engine.camera_mode,
+                                        "focus_cm": self.gaze_engine.get_focus_distance_cm(),
+                                        "screen": [round(self.width), round(self.height)]}) + "\n")
+                for k, (stage, dot, dot_x, dot_y, seconds, picture) in enumerate(self.eye_pictures):
+                    number, gray, (x0, y0), landmarks = picture
+                    filename = f"{stage}_{dot}_{k:03d}.png"
+                    save_gray_png(os.path.join(folder, filename), gray)
+                    index.write(json.dumps({"file": filename, "stage": stage, "dot": dot,
+                                            "dot_x": dot_x, "dot_y": dot_y, "seconds": seconds,
+                                            "picture_number": number, "x0": x0, "y0": y0,
+                                            "landmarks": np.round(landmarks, 1).tolist()}) + "\n")
+            print(f"[Calibration] {len(self.eye_pictures)} eye pictures saved in {folder}")
+        except OSError as e:
+            print(f"[Calibration] Could not save the eye pictures: {e}")
 
     # ---- leaving -----------------------------------------------------------
     def _leave_after(self, seconds):
