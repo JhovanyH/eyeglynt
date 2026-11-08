@@ -158,20 +158,18 @@ def _caregiver_pdf(doc, s, m, selections, h1, h2, body, small, table):
             ["Duration", _duration(s["duration_s"])],
             ["Total selections", str((m or {}).get("total_selections", 0))],
             ["Interface most used", most],
-            ["Unintended", str(sum(r["intent_status"] == "unintended" for r in selections))],
-            ["Ignored (not counted)", str(sum(r["intent_status"] == "ignored" for r in selections))],
         ], [45 * mm, 129 * mm], header=False),
         Paragraph(f"Activity log ({len(selections)} selections)", h2),
     ]
     if selections:
         rows = [["Time", "Interface", "What was said", "Note"]]
-        notes = {"unintended": "Unintended", "ignored": "Ignored"}
+        notes = {"unintended": "Unintended", "ignored": "Ignored (not counted)"}
         for r in selections:
             note = notes.get(r["intent_status"]) or ("Spoken" if r["selection_type"] == "speak" else "")
             rows.append([r["selected_at"].strftime("%I:%M:%S %p"),
                          "Quick-Fire" if r["interface"] == "quickfire" else "Keyboard",
                          Paragraph(escape(r["output_text"]), body), note])
-        story.append(table(rows, [28 * mm, 28 * mm, 92 * mm, 26 * mm]))
+        story.append(table(rows, [26 * mm, 24 * mm, 88 * mm, 36 * mm]))
     else:
         story.append(Paragraph("No selections were recorded.", small))
     story.append(Paragraph("Caregiver notes", h2))

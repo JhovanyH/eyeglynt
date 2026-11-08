@@ -95,10 +95,6 @@
       <tr><th>Start time</th><td class="tabular">{{ s.started_at|hm }}</td></tr>
       <tr><th>End time</th><td class="tabular">{{ s.ended_at|hm }}</td></tr>
       <tr><th>Duration</th><td class="tabular">{{ s.duration_s|duration }}</td></tr>
-      {% set n_unintended = selections|selectattr('intent_status', 'equalto', 'unintended')|list|length %}
-      {% set n_ignored = selections|selectattr('intent_status', 'equalto', 'ignored')|list|length %}
-      <tr><th>Unintended</th><td>{{ n_unintended }} selection{{ '' if n_unintended == 1 else 's' }} <span class="pill bad" style="font-size:11px">not intended</span></td></tr>
-      <tr><th>Ignored</th><td>{{ n_ignored }} selection{{ '' if n_ignored == 1 else 's' }} <span class="pill muted" style="font-size:11px">not counted</span></td></tr>
     </table>
   </section>
 
