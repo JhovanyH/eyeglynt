@@ -73,7 +73,9 @@ def load_user(user_id):
 
 @bp.route("/login", methods=["GET", "POST"])
 def login():
-    if current_user.is_authenticated:
+    # Already logged in: opening the page goes straight on, but typing a
+    # username and password is always checked (no skipping a wrong password).
+    if current_user.is_authenticated and request.method == "GET":
         return redirect(url_for("sessions.home"))
     form = {}
     if request.method == "POST":
@@ -90,6 +92,8 @@ def login():
             db.commit()
             nxt = request.args.get("next") or session.pop("next", None)
             return redirect(nxt if nxt and nxt.startswith("/") else url_for("sessions.home"))
+        if current_user.is_authenticated:
+            logout_user()   # a wrong password also ends the earlier login
         flash("Incorrect username or password.", "error")
     return render_template("auth.html", tab="login", form=form, roles=ROLES, errors={})
 
