@@ -7,17 +7,14 @@
 {% block content %}
 <div id="live" class="stack"
      data-session="{{ s.session_id }}"
-     data-mode="{{ s.mode }}"
      data-poll="{{ poll_ms }}"
      data-elapsed="{{ s.duration_s }}"
      data-updates-url="{{ url_for('api.updates', session_id=s.session_id) }}"
      data-recal-url="{{ url_for('api.recalibrate', session_id=s.session_id) }}"
      data-end-url="{{ url_for('api.end', session_id=s.session_id) }}"
-     data-dwell-url="{{ url_for('api.set_dwell', session_id=s.session_id) }}"
-     data-block-url="{{ url_for('api.test_block', session_id=s.session_id) }}"
+     data-stop-recal-url="{{ url_for('api.stop_recalibration', session_id=s.session_id) }}"
      data-flag-url="{{ url_for('api.flag_selection', selection_id=0) }}"
-     data-ack-url="{{ url_for('api.ack_alert', alert_id=0) }}"
-     data-score-url="{{ url_for('api.score_selection', selection_id=0) }}">
+     data-ack-url="{{ url_for('api.ack_alert', alert_id=0) }}">
 
   <section class="card">
     <div class="patient">
@@ -31,16 +28,9 @@
     <div class="meta-chips">
       {% if current_user.is_researcher %}
       <span class="pill muted">{{ s.session_code }}</span>
-      {% if s.mode == 'test' %}<span class="pill kb">Test Mode</span>{% else %}<span class="pill muted">Normal Mode</span>{% endif %}
       {% endif %}
       <span class="pill muted" id="device-chip">Device: …</span>
-      <label class="pill muted" style="gap:6px">Dwell
-        <select id="dwell" aria-label="Dwell time" style="border:0;background:transparent;font-weight:600;padding:0">
-          {% for ms, label in dwell_options %}
-          <option value="{{ ms }}" {{ 'selected' if s.dwell_time_ms == ms }}>{{ '%.1f'|format(ms/1000) }} s</option>
-          {% endfor %}
-        </select>
-      </label>
+      <span class="pill muted">Dwell {{ '%g'|format(s.dwell_time_ms/1000) }} s</span>
     </div>
   </section>
 
@@ -58,7 +48,7 @@
   <div class="live-grid">
     <section class="card">
       <h2 class="card-title"><svg class="icon"><use href="#i-list"/></svg> Activity log
-        <span class="aside">Tap <svg class="icon" style="width:14px;height:14px"><use href="#i-flag"/></svg> if a selection wasn't intended</span></h2>
+        <span class="aside">Tap <strong>Unintended</strong> if a selection was a mistake, or <strong>Ignore</strong> to leave it out of the results</span></h2>
       <div class="log-scroll" id="log-scroll">
         <ul class="log" id="activity"></ul>
         <p class="empty" id="activity-empty">Waiting for the first selection…</p>
@@ -66,26 +56,6 @@
     </section>
 
     <div class="stack">
-      {% if s.mode == 'test' %}
-      <section class="card test-panel" id="test-panel">
-        <h2 class="card-title"><svg class="icon"><use href="#i-beaker"/></svg> Evaluation tests</h2>
-        <p class="notice warn" id="test-unmarked" hidden style="margin:0 0 10px"></p>
-        <div id="test-idle">
-          <p style="margin:0 0 10px;font-size:14px;color:var(--muted)">Run the thesis procedures. Results are kept separate from free use. In the accuracy test, say the target word, then mark each selection Correct or Wrong.</p>
-          <div class="btn-row">
-            <button class="btn btn-sm" data-block="accuracy">Accuracy · 30 trials</button>
-            <button class="btn btn-sm" data-block="free_look">Free-look · 2 min</button>
-          </div>
-        </div>
-        <div id="test-running" hidden>
-          <div style="display:flex;justify-content:space-between;font-size:14px"><strong id="test-name">—</strong><span id="test-count" class="tabular">—</span></div>
-          <div class="progress"><div id="test-bar"></div></div>
-          <p id="test-detail" style="margin:4px 0 10px;font-size:13px;color:var(--muted)"></p>
-          <button class="btn btn-sm btn-block" id="test-stop">Stop test</button>
-        </div>
-      </section>
-      {% endif %}
-
       <section class="card">
         <h2 class="card-title"><svg class="icon"><use href="#i-bell"/></svg> System alerts</h2>
         <ul class="log alerts" id="alerts"></ul>
@@ -96,6 +66,7 @@
         <h2 class="card-title"><svg class="icon"><use href="#i-gear"/></svg> Session controls</h2>
         <div class="stack">
           <button class="btn btn-block" id="btn-recal"><svg class="icon"><use href="#i-refresh"/></svg> <span>Trigger manual recalibration</span></button>
+          <button class="btn btn-block" id="btn-stop-recal" hidden><svg class="icon"><use href="#i-stop"/></svg> <span>Stop calibration</span></button>
           <button class="btn btn-block btn-danger" id="btn-end"><svg class="icon"><use href="#i-stop"/></svg> <span>End session</span></button>
         </div>
       </section>

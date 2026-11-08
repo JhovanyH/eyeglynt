@@ -86,25 +86,10 @@
 
   <section class="card">
     <h2 class="card-title"><svg class="icon"><use href="#i-gear"/></svg> Session settings</h2>
-    <label class="field">
-      <span>Dwell time</span>
-      <select class="input" name="dwell_time_ms">
-        {% for ms, label in dwell_options %}
-        <option value="{{ ms }}" {{ 'selected' if form.get('dwell_time_ms', default_dwell_ms|string) == ms|string }}>{{ label }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    {% if current_user.is_researcher %}
-    <div class="field">
-      <span>Session mode</span>
-      <div class="segmented" role="radiogroup">
-        <input type="radio" id="mode-normal" name="mode" value="normal" {{ 'checked' if form.get('mode','normal') != 'test' }}>
-        <label for="mode-normal">Normal<small>Daily communication</small></label>
-        <input type="radio" id="mode-test" name="mode" value="test" {{ 'checked' if form.get('mode') == 'test' }}>
-        <label for="mode-test">Test<small>Formal evaluation</small></label>
-      </div>
-    </div>
-    {% endif %}
+    <p class="notice" style="margin:0 0 12px">
+      <svg class="icon"><use href="#i-info"/></svg>
+      <span>Dwell time: 4 seconds (EyeGlynt's default for every session).</span>
+    </p>
     <label class="field">
       <span>Session note (optional)</span>
       <textarea class="input" name="notes" placeholder="e.g. Patient is fatigued today…">{{ form.get('notes','') }}</textarea>

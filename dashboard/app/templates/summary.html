@@ -36,12 +36,13 @@
     <div class="log-scroll">
       <ul class="log">
         {% for r in selections %}
-        <li class="{{ 'unintended' if r.intent_status == 'unintended' }}" style="grid-template-columns:auto auto 1fr">
+        <li class="{{ r.intent_status if r.intent_status in ('unintended', 'ignored') }}{{ ' spoken' if r.selection_type == 'speak' }}" style="grid-template-columns:auto auto 1fr">
           <span class="t">{{ r.selected_at|hms }}</span>
           <span class="pill {{ 'qf' if r.interface == 'quickfire' else 'kb' }}">{{ 'Quick-Fire' if r.interface == 'quickfire' else 'Keyboard' }}</span>
-          <span class="txt">{{ r.output_text }}
+          <span class="txt">{% if r.selection_type == 'speak' %}<span class="spoke pill ok">Spoken</span>{% endif %}{{ r.output_text }}
             {% if show_test_marks and r.target_element_id is not none %}<span class="tag pill {{ 'ok' if r.is_correct else 'bad' }}">{{ '✓ target' if r.is_correct else '✗ missed' }}</span>{% endif %}
             {% if r.intent_status == 'unintended' %}<span class="tag pill bad">not intended</span>{% endif %}
+            {% if r.intent_status == 'ignored' %}<span class="tag pill muted">ignored, not counted</span>{% endif %}
           </span>
         </li>
         {% endfor %}
@@ -80,7 +81,7 @@
   {% if just_ended %}
   <div class="banner-ended" role="status">
     <span class="check-circle"><svg class="icon"><use href="#i-check"/></svg></span>
-    <div><strong>Session ended successfully</strong><span>Saved to database · {{ s.ended_at|date }}</span></div>
+    <div><strong>{{ 'The EyeGlynt app was closed, so the session ended' if app_closed else 'Session ended successfully' }}</strong><span>Saved to database · {{ s.ended_at|date }}</span></div>
   </div>
   {% endif %}
 
@@ -110,7 +111,7 @@
   <div class="summary-grid stack">
     <section class="card">
       <h2 class="card-title"><svg class="icon"><use href="#i-user"/></svg> Patient information
-        <span class="aside">{{ s.session_code }} · {{ 'Test Mode' if s.mode == 'test' else 'Normal Mode' }}</span></h2>
+        <span class="aside">{{ s.session_code }}{{ ' · Test Mode (old)' if s.mode == 'test' }}</span></h2>
       <table class="kv">
         <tr><th>Name</th><td>{{ s.patient_name }} <span class="pill muted">{{ s.patient_code }}</span></td></tr>
         <tr><th>Care setting</th><td>{{ s.care_setting }}</td></tr>
@@ -135,7 +136,7 @@
       </div>
       <p style="font-size:12px;color:var(--muted);margin:8px 2px 0">
         {% if s.mode == 'test' %}Accuracy = correct ÷ trials in accuracy tests. False positives include all free-look activations.
-        {% else %}Normal Mode: accuracy counts every selection as intended unless a caregiver flagged it. Use Test Mode for thesis benchmarks.{% endif %}
+        {% else %}Accuracy counts every selection as intended unless it was marked Unintended. Ignored selections are left out of every result.{% endif %}
       </p>
     </section>
   </div>

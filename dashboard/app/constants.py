@@ -10,18 +10,9 @@ ROLES = [
 
 CARE_SETTINGS = ["Home", "Hospital", "Rehabilitation / Therapy Center", "Long-term Care Facility", "Other"]
 
-# (milliseconds, label). The device uses the dwell time chosen here for the
-# whole session. The default is the device's own DWELL_TIME (main.py): in
-# testing, 1.5 s and 2 s were too quick for the gaze pointer's accuracy.
-DWELL_OPTIONS = [
-    (1500, "1.5 seconds"),
-    (2000, "2.0 seconds"),
-    (2500, "2.5 seconds"),
-    (3000, "3.0 seconds (default)"),
-    (3500, "3.5 seconds"),
-    (4000, "4.0 seconds"),
-]
-DEFAULT_DWELL_MS = 3000
+# EyeGlynt's dwell time is fixed at 4 seconds (DWELL_TIME in main.py).
+# It is no longer chosen on the dashboard; sessions just record it.
+DWELL_TIME_MS = 4000
 
 # Thesis Table 7 — Performance Benchmarks
 BENCHMARKS = {
@@ -38,6 +29,8 @@ ALERT_LABELS = {
     "recalibration_started": "Recalibration started",
     "recalibration_success": "Recalibration successful",
     "recalibration_failed": "Recalibration failed",
+    "recalibration_cancelled": "Calibration stopped",
+    "session_auto_ended": "EyeGlynt app closed",
     "calibration_required": "Calibration required",
     "system": "System",
 }
@@ -50,5 +43,7 @@ CAREGIVER_ALERT_TEXT = {
     "recalibration_started": "The device is recalibrating.",
     "recalibration_success": "Recalibration finished. Tracking is back.",
     "recalibration_failed": "Recalibration didn't work. Check the patient's position and the room lighting.",
+    "recalibration_cancelled": "Calibration was stopped. The device went back to the keyboard.",
+    "session_auto_ended": "The EyeGlynt app was closed on the device, so the session ended.",
     "calibration_required": "The device needs to be calibrated.",
 }

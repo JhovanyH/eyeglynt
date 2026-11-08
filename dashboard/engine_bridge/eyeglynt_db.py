@@ -161,6 +161,15 @@ class EyeGlyntDB:
             self.raise_alert("recalibration_failed", "Tracking could not be restored — check position and lighting",
                              severity="critical")
 
+    def cancel_recalibration(self, recal_id: int) -> None:
+        """Calibration was stopped from the dashboard: closed with no result
+        (success stays NULL), so it is not counted as a success or a failure."""
+        if recal_id is None:
+            return
+        self._run("UPDATE recalibrations SET completed_at=NOW(3) WHERE recal_id=%s AND success IS NULL",
+                  (recal_id,))
+        self.raise_alert("recalibration_cancelled", "Calibration stopped from the dashboard", severity="info")
+
     def save_calibration_profile(self, patient_id: int, model_params: dict, fit_accuracy_pct: float,
                                  points_captured: int = 5) -> int:
         """Store a 5-point calibration. Becomes the patient's active profile if fit ≥ 90 %."""
@@ -193,7 +202,7 @@ class EyeGlyntDB:
 
     def heartbeat(self, tracking_state: str = "tracking", *, fps: float | None = None,
                   lux: float | None = None, profile_id: int | None = None, version: str = "1.0") -> None:
-        """tracking_state: idle | calibrating | tracking | lost"""
+        """tracking_state: idle | calibrating | tracking | lost | closed (the app is closing)"""
         self._run(
             """INSERT INTO device_status (device_id, last_heartbeat, tracking_state, fps, current_lux,
                    active_profile_id, software_version) VALUES (1, NOW(3), %s, %s, %s, %s, %s)

@@ -59,78 +59,70 @@
   $("timer").textContent = fmtClock(state.elapsed);
 
   // ---------------------------------------------------------------- activity log
+  // Each selection has two buttons:
+  //   Unintended - a mistake: counts against accuracy / false positives
+  //   Ignore     - left out of every metric (e.g. a word that can't be judged)
   function renderSelection(s, isNew) {
-    const li = el("li", (s.intent === "unintended" ? "unintended " : "") + (isNew ? "is-new" : ""));
+    const li = el("li", (isNew ? "is-new" : ""));
     li.dataset.id = s.id;
     li.appendChild(el("span", "t", s.time));
     li.appendChild(el("span", "pill " + (s.interface === "quickfire" ? "qf" : "kb"),
                       s.interface === "quickfire" ? "Quick-Fire" : "Keyboard"));
-    const txt = el("span", "txt", s.text);
-    if (s.block_type === "accuracy" && D.mode === "test") {
-      txt.appendChild(scoreButtons(s));
-    } else if (s.target !== null) {
+    const txt = el("span", "txt");
+    if (s.type === "speak") {           // a sentence typed on the keyboard and spoken
+      li.classList.add("spoken");
+      txt.appendChild(el("span", "spoke pill ok", "Spoken"));
+    }
+    txt.appendChild(document.createTextNode(s.text));
+    if (s.target !== null) {            // old Test Mode sessions only
       txt.appendChild(document.createTextNode(" "));
       txt.appendChild(el("span", "tag pill " + (s.is_correct ? "ok" : "bad"),
                          s.is_correct ? "✓ target" : "✗ missed"));
-    } else if (s.in_block && D.mode === "test") {
-      txt.appendChild(document.createTextNode(" "));
-      txt.appendChild(el("span", "tag pill warn", "free-look"));
     }
     li.appendChild(txt);
 
-    const btn = el("button", "flag");
-    btn.type = "button";
-    btn.appendChild(icon("flag"));
-    btn.appendChild(el("span", null, s.intent === "unintended" ? "Unintended" : ""));
-    btn.title = s.intent === "unintended" ? "Marked unintended — tap to undo" : "Mark as unintended";
-    btn.setAttribute("aria-label", btn.title);
-    btn.addEventListener("click", () => toggleFlag(li, btn));
-    li.appendChild(btn);
+    const marks = el("span", "marks");
+    const flag = el("button", "flag unintended-btn");
+    flag.type = "button";
+    flag.appendChild(icon("flag"));
+    flag.appendChild(el("span", null, "Unintended"));
+    const ignore = el("button", "flag ignore", "Ignore");
+    ignore.type = "button";
+    flag.addEventListener("click", () => setIntent(li, s.id, "unintended"));
+    ignore.addEventListener("click", () => setIntent(li, s.id, "ignored"));
+    marks.append(flag, ignore);
+    li.appendChild(marks);
+    showIntent(li, s.intent);
     return li;
   }
 
-  // Accuracy test: the researcher says the target word out loud, then marks the selection.
-  function scoreButtons(s) {
-    const box = el("span", "score");
-    const current = s.target === null ? null : (s.is_correct ? "correct" : "wrong");
-    [["correct", "✓ Correct"], ["wrong", "✗ Wrong"]].forEach(([value, label]) => {
-      const b = el("button", "score-btn " + value + (current === value ? " on" : ""), label);
-      b.type = "button";
-      b.setAttribute("aria-pressed", current === value ? "true" : "false");
-      b.addEventListener("click", async () => {
-        const turningOff = b.classList.contains("on");
-        const result = turningOff ? "clear" : value;
-        box.querySelectorAll("button").forEach((x) => (x.disabled = true));
-        try {
-          await post(withId(D.scoreUrl, s.id), { result: result });
-          box.querySelectorAll("button").forEach((x) => {
-            const on = !turningOff && x === b;
-            x.classList.toggle("on", on);
-            x.setAttribute("aria-pressed", on ? "true" : "false");
-          });
-          toast(result === "clear" ? "Score removed" : result === "correct" ? "Marked correct" : "Marked wrong");
-          poll();
-        } catch (e) { toast(e.message); }
-        box.querySelectorAll("button").forEach((x) => (x.disabled = false));
-      });
-      box.appendChild(b);
-    });
-    return box;
+  function showIntent(li, intent) {
+    li.dataset.intent = intent;
+    li.classList.toggle("unintended", intent === "unintended");
+    li.classList.toggle("ignored", intent === "ignored");
+    const flag = li.querySelector(".unintended-btn"), ignore = li.querySelector(".ignore");
+    flag.title = intent === "unintended" ? "Marked unintended. Tap to undo" : "Mark as unintended (a mistake)";
+    ignore.title = intent === "ignored" ? "Ignored. Tap to count it again" : "Ignore: leave it out of the results";
+    ignore.textContent = intent === "ignored" ? "Ignored" : "Ignore";
+    flag.setAttribute("aria-pressed", intent === "unintended" ? "true" : "false");
+    ignore.setAttribute("aria-pressed", intent === "ignored" ? "true" : "false");
+    flag.setAttribute("aria-label", flag.title);
+    ignore.setAttribute("aria-label", ignore.title);
   }
 
-  async function toggleFlag(li, btn) {
-    const nowUnintended = !li.classList.contains("unintended");
-    btn.disabled = true;
+  // Tapping the button that is already on turns it off again.
+  async function setIntent(li, id, wanted) {
+    const intent = li.dataset.intent === wanted ? "intended" : wanted;
+    const buttons = li.querySelectorAll(".marks button");
+    buttons.forEach((b) => (b.disabled = true));
     try {
-      await post(withId(D.flagUrl, li.dataset.id), { intent: nowUnintended ? "unintended" : "intended" });
-      li.classList.toggle("unintended", nowUnintended);
-      btn.lastChild.textContent = nowUnintended ? "Unintended" : "";
-      btn.title = nowUnintended ? "Marked unintended — tap to undo" : "Mark as unintended";
-      btn.setAttribute("aria-label", btn.title);
-      toast(nowUnintended ? "Marked as unintended" : "Flag removed");
+      await post(withId(D.flagUrl, id), { intent: intent });
+      showIntent(li, intent);
+      toast({ unintended: "Marked as unintended", ignored: "Ignored: not counted in the results",
+              intended: "Mark removed" }[intent]);
       poll();
     } catch (e) { toast(e.message); }
-    btn.disabled = false;
+    buttons.forEach((b) => (b.disabled = false));
   }
 
   // ---------------------------------------------------------------- alerts
@@ -192,42 +184,17 @@
             most ? count + "/" + m.total_selections + " selections" : " ");
   }
 
-  // ---------------------------------------------------------------- device + test panel
+  // ---------------------------------------------------------------- device
   function renderDevice(dev) {
     const badge = $("live-badge");
     badge.classList.toggle("offline", !dev.online);
     badge.textContent = dev.online ? "Live" : "Device offline";
     const chip = $("device-chip");
-    const label = { tracking: "tracking", calibrating: "calibrating", lost: "gaze lost", idle: "idle" }[dev.state] || "—";
+    const label = { tracking: "tracking", calibrating: "calibrating", lost: "gaze lost", idle: "idle",
+                    closed: "app closed" }[dev.state] || "—";
     chip.textContent = dev.online ? "Device: " + label + (dev.fps ? " · " + Math.round(dev.fps) + " fps" : "") : "Device: offline";
     chip.className = "pill " + (!dev.online ? "bad" : dev.state === "tracking" ? "ok" : "warn");
   }
-  function renderBlock(block) {
-    if (!$("test-panel")) return;
-    $("test-idle").hidden = !!block;
-    $("test-running").hidden = !block;
-    // Trials from a finished accuracy test can still be marked; remind the researcher.
-    const unmarked = root.querySelectorAll("#activity .score:not(:has(.on))").length;
-    $("test-unmarked").hidden = !!block || unmarked === 0;
-    $("test-unmarked").textContent = unmarked + " accuracy trial(s) still need Correct or Wrong. Mark them in the activity log before ending the session.";
-    if (!block) return;
-    if (block.type === "accuracy") {
-      const total = block.planned_trials || 30;
-      $("test-name").textContent = "Accuracy trials";
-      $("test-count").textContent = block.activations + " / " + total;
-      $("test-bar").style.width = Math.min(100, (100 * block.activations) / total) + "%";
-      $("test-detail").textContent = block.trials + " marked, " + block.correct
-        + " correct. Say the target word, then mark each selection Correct or Wrong. The test stops after " + total + " selections.";
-    } else {
-      const total = block.planned_seconds || 120;
-      const left = Math.max(0, total - block.elapsed_s);
-      $("test-name").textContent = "Free-look observation";
-      $("test-count").textContent = fmtClock(left) + " left";
-      $("test-bar").style.width = Math.min(100, (100 * block.elapsed_s) / total) + "%";
-      $("test-detail").textContent = block.activations + " unintended activation(s). Ask the user to look around without selecting.";
-    }
-  }
-
   // ---------------------------------------------------------------- polling
   let timer = null, inFlight = false;
   async function poll() {
@@ -261,17 +228,16 @@
 
       renderMetrics(data.metrics, data.checks);
       renderDevice(data.device);
-      renderBlock(data.block);
 
-      const recal = $("btn-recal");
+      // While the device is calibrating (or about to), offer Stop calibration.
+      const calibrating = data.recal_pending || (data.device.online && data.device.state === "calibrating");
+      const recal = $("btn-recal"), stop = $("btn-stop-recal");
       if (!recal.dataset.busy) {
-        recal.disabled = data.recal_pending;
+        recal.disabled = calibrating;
         recal.querySelector("span").textContent = data.recal_pending
-          ? "Recalibration requested…" : "Trigger manual recalibration";
+          ? "Recalibration requested…" : calibrating ? "Calibrating…" : "Trigger manual recalibration";
       }
-      if (String(data.dwell_time_ms) !== $("dwell").value && document.activeElement !== $("dwell")) {
-        $("dwell").value = String(data.dwell_time_ms);
-      }
+      if (!stop.dataset.busy) stop.hidden = !calibrating;
       state.firstLoad = false;
     } catch (e) {
       state.failures += 1;
@@ -312,24 +278,12 @@
     catch (e) { toast(e.message); endBtn.disabled = false; }
   });
 
-  $("dwell").addEventListener("change", async (ev) => {
-    try { await post(D.dwellUrl, { dwell_time_ms: parseInt(ev.target.value, 10) });
-          toast("Dwell time set to " + (ev.target.value / 1000).toFixed(1) + " s"); }
+  $("btn-stop-recal").addEventListener("click", async (ev) => {
+    const b = ev.currentTarget;
+    b.disabled = true; b.dataset.busy = "1";
+    try { await post(D.stopRecalUrl); toast("Stopping calibration on the device"); }
     catch (e) { toast(e.message); }
-  });
-
-  root.querySelectorAll("[data-block]").forEach((b) =>
-    b.addEventListener("click", async () => {
-      b.disabled = true;
-      try { await post(D.blockUrl, { action: "start", type: b.dataset.block });
-            toast(b.dataset.block === "accuracy" ? "Accuracy test started" : "Free-look test started"); }
-      catch (e) { toast(e.message); }
-      b.disabled = false;
-      poll();
-    })
-  );
-  if ($("test-stop")) $("test-stop").addEventListener("click", async () => {
-    try { await post(D.blockUrl, { action: "end" }); toast("Test stopped"); } catch (e) { toast(e.message); }
+    b.disabled = false; delete b.dataset.busy;
     poll();
   });
 

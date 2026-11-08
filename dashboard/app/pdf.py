@@ -66,7 +66,7 @@ def build_summary_pdf(s, m, checks, selections, alerts, anonymise=False, detaile
     story = [
         Paragraph("EyeGlynt — Session Summary", h1),
         Paragraph(f"Session {s['session_code'].strip()} · "
-                  f"{'Test Mode (formal evaluation)' if s['mode'] == 'test' else 'Normal Mode'}", small),
+                  f"{' · Test Mode (old)' if s['mode'] == 'test' else ''}", small),
         Spacer(1, 6),
         Paragraph("Patient &amp; session", h2),
         table([
@@ -97,7 +97,8 @@ def build_summary_pdf(s, m, checks, selections, alerts, anonymise=False, detaile
     story += [Paragraph("Performance metrics", h2), mt]
     basis = ("Accuracy computed from Test Mode trials (correct ÷ trials)."
              if s["mode"] == "test" else
-             "Normal Mode: accuracy assumes selections were intended unless a caregiver flagged them.")
+             "Accuracy counts selections as intended unless they were marked Unintended. "
+             "Ignored selections are left out of every result.")
     story.append(Paragraph(basis, small))
 
     # Activity log
@@ -107,6 +108,10 @@ def build_summary_pdf(s, m, checks, selections, alerts, anonymise=False, detaile
         note = ""
         if r["intent_status"] == "unintended":
             note = "Flagged unintended"
+        elif r["intent_status"] == "ignored":
+            note = "Ignored (not counted)"
+        elif r["selection_type"] == "speak":
+            note = "Spoken"
         elif r["target_element_id"] is not None:
             note = "Correct" if r["is_correct"] else f"Missed target {r['target_element_id']}"
         log.append([r["selected_at"].strftime("%H:%M:%S"),

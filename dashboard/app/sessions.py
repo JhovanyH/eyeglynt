@@ -6,7 +6,7 @@ from flask import (Blueprint, Response, abort, current_app, flash, redirect,
 from flask_login import current_user, login_required
 
 from . import db, metrics
-from .constants import ALERT_LABELS, BENCHMARKS, CARE_SETTINGS, DEFAULT_DWELL_MS, DWELL_OPTIONS
+from .constants import ALERT_LABELS, BENCHMARKS, CARE_SETTINGS, DWELL_TIME_MS
 
 bp = Blueprint("sessions", __name__)
 
@@ -29,18 +29,13 @@ def get_session(session_id):
 
 
 def active_session():
+    metrics.end_if_app_closed()   # the EyeGlynt app was closed: that session is over
     return db.query("SELECT session_id, mode FROM sessions WHERE status='active' LIMIT 1", one=True)
 
 
 def active_session_id():
     row = active_session()
     return row["session_id"] if row else None
-
-
-def guard_view(s):
-    """Caregivers only see Normal Mode sessions; Test Mode belongs to researchers."""
-    if s["mode"] == "test" and not current_user.is_researcher:
-        abort(403)
 
 
 def session_selections(session_id, after_id=0):
@@ -78,8 +73,6 @@ def home():
     active = active_session()
     if not active:
         return redirect(url_for(".start"))
-    if active["mode"] == "test" and not current_user.is_researcher:
-        return render_template("busy.html")
     return redirect(url_for(".live", session_id=active["session_id"]))
 
 
@@ -119,14 +112,8 @@ def start():
             care_setting = chosen["care_setting"] if chosen else None
             if chosen and not care_setting:
                 errors["care_setting"] = "This patient has no care setting yet. Ask the research team to set it."
-        try:
-            dwell = int(form.get("dwell_time_ms", DEFAULT_DWELL_MS))
-            if dwell not in [d for d, _ in DWELL_OPTIONS]:
-                raise ValueError
-        except ValueError:
-            errors["dwell_time_ms"] = "Select a dwell time."
-        # Only researchers may start Test Mode; caregivers always get Normal Mode.
-        mode = "test" if form.get("mode") == "test" and current_user.is_researcher else "normal"
+        # One mode for everyone, and the device's fixed 4 s dwell time.
+        mode, dwell = "normal", DWELL_TIME_MS
 
         if not errors:
             try:
@@ -156,8 +143,7 @@ def start():
                      profile["profile_id"] if profile else None, form.get("notes") or None),
                 )
                 metrics.queue_command(session_id, "start_session", current_user.id,
-                                      {"session_id": session_id, "dwell_time_ms": dwell, "mode": mode,
-                                       "patient_id": patient_id})
+                                      {"session_id": session_id, "patient_id": patient_id})
                 db.commit()
             except Exception as exc:  # most likely: another session started at the same moment
                 db.rollback()
@@ -170,20 +156,19 @@ def start():
 
     return render_template(
         "start.html", form=form, errors=errors, patients=patients,
-        care_settings=CARE_SETTINGS, dwell_options=DWELL_OPTIONS, device=metrics.device_status(),
-        default_dwell_ms=DEFAULT_DWELL_MS,
+        care_settings=CARE_SETTINGS, device=metrics.device_status(),
     )
 
 
 @bp.route("/session/<int:session_id>/live")
 @login_required
 def live(session_id):
+    metrics.end_if_app_closed()
     s = get_session(session_id)
-    guard_view(s)
     if s["status"] == "ended":
         return redirect(url_for(".summary", session_id=session_id))
     return render_template(
-        "live.html", s=s, dwell_options=DWELL_OPTIONS,
+        "live.html", s=s,
         poll_ms=current_app.config["POLL_INTERVAL_MS"], benchmarks=BENCHMARKS,
     )
 
@@ -192,7 +177,6 @@ def live(session_id):
 @login_required
 def summary(session_id):
     s = get_session(session_id)
-    guard_view(s)
     if s["status"] == "active":
         return redirect(url_for(".live", session_id=session_id))
     m = metrics.saved_metrics(session_id)
@@ -201,13 +185,14 @@ def summary(session_id):
         selections=session_selections(session_id), alerts=session_alerts(session_id),
         alert_labels=ALERT_LABELS,
         just_ended=request.args.get("ended") == "1",
+        app_closed=request.args.get("closed") == "1",
     )
 
 
 @bp.route("/session/<int:session_id>/notes", methods=["POST"])
 @login_required
 def save_notes(session_id):
-    guard_view(get_session(session_id))
+    get_session(session_id)
     notes = request.form.get("post_session_notes", "").strip()
     db.execute("UPDATE sessions SET post_session_notes=%s WHERE session_id=%s",
                (notes or None, session_id))
@@ -222,7 +207,6 @@ def summary_pdf(session_id):
     from .pdf import build_summary_pdf
 
     s = get_session(session_id)
-    guard_view(s)
     if s["status"] != "ended":
         abort(400)
     anonymise = request.args.get("anon") == "1"
@@ -242,8 +226,6 @@ def history():
         return redirect(url_for(".home"))     # History is for researchers only
     patient_id = request.args.get("patient", type=int)
     conds, args = [], []
-    if not current_user.is_researcher:
-        conds.append("s.mode='normal'")          # caregivers never see research sessions
     if patient_id:
         conds.append("s.patient_id=%s")
         args.append(patient_id)
