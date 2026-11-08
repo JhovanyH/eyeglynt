@@ -50,37 +50,6 @@ def to_jsonable(metrics):
     return out
 
 
-def close_expired_test_blocks(session_id):
-    """Auto-close accuracy blocks after their planned number of selections (e.g. 30), marked or not,
-    and free-look blocks past their time. Researchers can still mark trials after the block closes."""
-    changed = db.execute(
-        """UPDATE test_blocks b
-           SET b.ended_at = NOW(3)
-           WHERE b.session_id=%s AND b.ended_at IS NULL AND (
-                 (b.block_type='free_look' AND b.planned_seconds IS NOT NULL
-                    AND TIMESTAMPDIFF(SECOND, b.started_at, NOW(3)) >= b.planned_seconds)
-              OR (b.block_type='accuracy' AND b.planned_trials IS NOT NULL
-                    AND (SELECT COUNT(*) FROM selections s WHERE s.block_id=b.block_id)
-                        >= b.planned_trials))""",
-        (session_id,),
-    )
-    db.commit()
-    return changed
-
-
-def active_test_block(session_id):
-    return db.query(
-        """SELECT b.*, TIMESTAMPDIFF(SECOND, b.started_at, NOW(3)) AS elapsed_s,
-                  (SELECT COUNT(*) FROM selections s WHERE s.block_id=b.block_id) AS activations,
-                  (SELECT COUNT(*) FROM selections s WHERE s.block_id=b.block_id
-                     AND s.target_element_id IS NOT NULL) AS trials,
-                  (SELECT COALESCE(SUM(s.is_correct),0) FROM selections s WHERE s.block_id=b.block_id) AS correct
-           FROM test_blocks b WHERE b.session_id=%s AND b.ended_at IS NULL
-           ORDER BY b.block_id DESC LIMIT 1""",
-        (session_id,), one=True,
-    )
-
-
 def device_status():
     row = db.query(
         """SELECT tracking_state, fps, current_lux, software_version, last_heartbeat,
@@ -101,22 +70,52 @@ def queue_command(session_id, command, issued_by, payload=None):
     )
 
 
-def end_session(session_id, caregiver_id):
-    """Close test blocks, mark ended, freeze metrics, tell the device. Idempotent."""
-    session = db.query("SELECT status FROM sessions WHERE session_id=%s FOR UPDATE",
+def end_session(session_id, caregiver_id, ended_at=None, app_closed=False):
+    """Mark ended, freeze metrics, tell the device. Idempotent.
+    app_closed=True: the EyeGlynt app was closed on the device (see
+    end_if_app_closed), so the session ends at ended_at and the device
+    isn't sent anything."""
+    session = db.query("SELECT status, started_at FROM sessions WHERE session_id=%s FOR UPDATE",
                        (session_id,), one=True)
     if not session or session["status"] == "ended":
         db.rollback()
         return False
     db.execute("UPDATE test_blocks SET ended_at=NOW(3) WHERE session_id=%s AND ended_at IS NULL",
                (session_id,))
-    db.execute("UPDATE sessions SET status='ended', ended_at=NOW(3) WHERE session_id=%s",
-               (session_id,))
+    if ended_at is None or ended_at < session["started_at"]:
+        ended_at = None
+    db.execute("UPDATE sessions SET status='ended', ended_at=COALESCE(%s, NOW(3)) WHERE session_id=%s",
+               (ended_at, session_id))
+    if app_closed:
+        db.execute(
+            """INSERT INTO system_alerts (session_id, alert_type, severity, message)
+               VALUES (%s, 'session_auto_ended', 'info', %s)""",
+            (session_id, "The EyeGlynt app was closed on the device, so the session ended automatically."),
+        )
     db.execute(
         f"""REPLACE INTO session_metrics (session_id, {METRIC_COLUMNS})
             SELECT session_id, {METRIC_COLUMNS} FROM v_session_metrics WHERE session_id=%s""",
         (session_id,),
     )
-    queue_command(session_id, "end_session", caregiver_id)
+    if not app_closed:
+        queue_command(session_id, "end_session", caregiver_id)
     db.commit()
     return True
+
+
+def end_if_app_closed():
+    """Ends the running session if the EyeGlynt app was closed on the device
+    after the session started (the app sends the state "closed" as it
+    closes, see dashboard_link.py). Returns the ended session's id or None."""
+    row = db.query(
+        """SELECT s.session_id, d.last_heartbeat
+           FROM sessions s JOIN device_status d ON d.device_id = 1
+           WHERE s.status='active' AND d.tracking_state='closed'
+             AND d.last_heartbeat > s.started_at
+           LIMIT 1""",
+        one=True,
+    )
+    if not row:
+        return None
+    end_session(row["session_id"], None, ended_at=row["last_heartbeat"], app_closed=True)
+    return row["session_id"]

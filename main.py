@@ -105,7 +105,7 @@ Window.size = (SCREEN_W, SCREEN_H)
 # (29 October), 1.5 s and then 2 s were too quick. With the pointer
 # still off by a few centimetres, keys were selected before the user
 # could settle on the right one.
-DWELL_TIME = 3.0  # seconds
+DWELL_TIME = 4.0  # seconds (fixed: the caregiver dashboard no longer changes it)
 
 # Gaze is never perfectly steady: the pointer jitters by a few millimetres
 # even when the eyes are still, and a blink can throw it off for a moment.
@@ -359,7 +359,7 @@ class DwellButton(Button):
                  selectable=True, image=None, **kwargs):
         super().__init__(**kwargs)
         self.on_selected = on_selected
-        # None = the current DWELL_TIME / REPEAT_TIME (see set_dwell_time).
+        # None = the current DWELL_TIME / REPEAT_TIME.
         self.dwell_time = dwell_time if dwell_time is not None else DWELL_TIME
         self.repeatable = repeatable
         self.repeat_time = repeat_time if repeat_time is not None else REPEAT_TIME
@@ -552,23 +552,6 @@ def tell_dashboard(btn, interface, kind, element_id, text, category=None, naviga
         pointer = (x, Window.height - y)   # pixels from the TOP left of the screen
     dashboard.selection(interface, kind, element_id, text, category=category,
                         dwell_s=btn._active_dwell_time, pointer=pointer, navigation=navigation)
-
-
-DEVICE_DWELL_TIME = DWELL_TIME   # the setting at the top, used again when a dashboard session ends
-
-
-def set_dwell_time(seconds):
-    """Changes the dwell time of every button, for example when the
-    caregiver picks another dwell time on the dashboard."""
-    global DWELL_TIME, REPEAT_TIME, CLEAR_CONFIRM_TIME
-    if seconds == DWELL_TIME:
-        return
-    DWELL_TIME = REPEAT_TIME = seconds           # for the buttons made from now on
-    CLEAR_CONFIRM_TIME = REPEAT_TIME + 2.0
-    for screen in App.get_running_app().root.screens:
-        for btn in _find_dwell_buttons(screen):  # and for the ones already there
-            btn.dwell_time = btn.repeat_time = seconds
-    print(f"[Dashboard] Dwell time is now {seconds:.1f} seconds")
 
 
 # ---------------------------------------------------------------------------
@@ -1333,6 +1316,12 @@ RESULT_SECONDS = 15             # how long the result stays on screen (to photog
 # folder, so the real measurements can be analysed later. Set
 # RUN_ACCURACY_TEST to False for the real user sessions.
 RUN_ACCURACY_TEST = True
+
+# The gaze engine's calibration, saved when the calibration screen opens
+# so "Stop calibration" on the caregiver dashboard can put it back.
+CALIBRATION_STATE = ("_x_points", "_y_points", "_shakes", "_x_fit", "_y_fit",
+                     "_x_backup", "_y_backup", "_calib_face_sizes", "_calib_face_size",
+                     "_x_heads", "_y_heads", "_calib_head", "_centre_x", "_centre_y")
 ACCURACY_TEST_POINTS = [
     (0.25, 0.65), (0.50, 0.65), (0.75, 0.65),   # upper row, left to right
     (0.75, 0.30), (0.50, 0.30), (0.25, 0.30),   # lower row, right to left
@@ -1415,6 +1404,9 @@ class CalibrationScreen(Screen):
         self.target_index = 0
         self.log_rows = []
         self.test_results = []
+        # Kept so "Stop calibration" on the dashboard can put it back (see cancel).
+        self._previous_calibration = {name: getattr(self.gaze_engine, name)
+                                      for name in CALIBRATION_STATE if hasattr(self.gaze_engine, name)}
         self.gaze_engine.clear_calibration()
         self.stage = "ready"
         self._leaving = False
@@ -1595,6 +1587,8 @@ class CalibrationScreen(Screen):
         if self._sample_event is not None:
             self._sample_event.cancel()
             self._sample_event = None
+        if self.manager is None or self.manager.current != self.name:
+            return  # calibration was stopped (see cancel): don't carry on in the background
 
         if self.stage == "test":
             self.test_results.append((*self.current_target_px, self.pointer_samples))
@@ -1730,6 +1724,20 @@ class CalibrationScreen(Screen):
         self._leaving = True
         Clock.schedule_once(lambda dt: self._done(), seconds)
 
+    def cancel(self):
+        """"Stop calibration" on the caregiver dashboard: stops the dots and
+        puts back the calibration from before (if there was one). The app
+        then shows the keyboard."""
+        self._leaving = True
+        if self._sample_event is not None:
+            self._sample_event.cancel()
+            self._sample_event = None
+        self.dot.pos = (-100, -100)
+        for name, value in getattr(self, "_previous_calibration", {}).items():
+            setattr(self.gaze_engine, name, value)
+        print("[Calibration] Stopped from the dashboard"
+              + ("" if self.gaze_engine.is_calibrated() else " (no earlier calibration: using the mouse)"))
+
     def on_leave(self, *args):
         self._stop_preview()
         if self._countdown_event is not None:
@@ -1799,11 +1807,12 @@ class EyeGlyntApp(App):
                 dashboard.recalibration_started("manual_caregiver")
                 if not calibrating:
                     self.sm.current = "calibration"
-            elif command in ("start_session", "set_dwell_time") and details.get("dwell_time_ms"):
-                # The dwell time the caregiver picked for this session.
-                set_dwell_time(details["dwell_time_ms"] / 1000)
-            elif command == "end_session":
-                set_dwell_time(DEVICE_DWELL_TIME)
+            elif command == "cancel_recalibration" and self.sm.current == "calibration":
+                # The caregiver pressed Stop calibration: back to the keyboard
+                # with the calibration from before.
+                self.sm.get_screen("calibration").cancel()
+                dashboard.recalibration_cancelled()
+                self.sm.current = "keyboard"
 
     def on_start(self):
         # Open maximized, filling the screen but keeping the title bar, so

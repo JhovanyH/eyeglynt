@@ -3,7 +3,7 @@ EyeGlynt <-> Caregiver Dashboard link
 =====================================
 Tells the caregiver dashboard (the "dashboard" folder: a website on this
 Pi that caregivers open on their phone) what happens on the device, and
-carries out the dashboard's buttons (Recalibrate, dwell time).
+carries out the dashboard's buttons (Recalibrate, Stop calibration).
 
 The device and the dashboard never talk to each other directly. Both use
 the Pi's database (MariaDB), through dashboard/engine_bridge/eyeglynt_db.py.
@@ -27,7 +27,9 @@ How main.py uses it:
     dashboard.update(...)                  many times a second: device status
     dashboard.take_commands()              the dashboard's button presses
     dashboard.recalibration_started() / recalibration_finished(ok)
-    dashboard.stop()                       when the app closes
+    dashboard.recalibration_cancelled()    Stop calibration was pressed
+    dashboard.stop()                       when the app closes: the
+                                           dashboard then ends the session
 """
 
 import os
@@ -59,12 +61,11 @@ GAZE_LOST_AFTER = 0.3  # seconds
 
 # NAVIGATION SELECTIONS are the ones that only move around the screens:
 # opening a letter group or a Quick Fires category, Back, 123/ABC, Shift,
-# the KEYBOARD / QUICK FIRES tabs. They are saved only during a free-look
-# test (Test Mode), where EVERY activation counts as unintended (False
-# Positive Rate). The rest of the time only selections that type, erase or
-# speak are saved, so the caregiver's Activity Log shows the user's words,
-# and each accuracy-test trial is one letter or phrase. Set this to False
-# to save navigation selections all the time.
+# the KEYBOARD / QUICK FIRES tabs. They are not saved, so the caregiver's
+# Activity Log shows the user's words: only selections that type, erase or
+# speak. (They used to be saved during Test Mode's free-look test; Test
+# Mode was removed on 8 November.) Set this to False to save navigation
+# selections too.
 NAVIGATION_ONLY_IN_FREE_LOOK = True
 
 VERSION = "eyeglynt-app"  # shown to researchers on the dashboard
@@ -128,17 +129,16 @@ class DashboardLink:
                               password=env.get("ENGINE_DB_PASSWORD", ""),
                               database=env.get("DB_NAME"))
         self.enabled = True
-        # If the app was restarted during a session, use that session's dwell time.
-        self._do(self._resume_session)
         threading.Thread(target=self._background, daemon=True).start()
         print("[Dashboard] Connected: the caregiver dashboard will show this device")
 
     def stop(self):
-        """Tells the dashboard the device is switching off (waits at most 2 seconds)."""
+        """Tells the dashboard the app is closing (waits at most 2 seconds).
+        The dashboard then ends the running session by itself."""
         if not self.enabled or self._failing:
             return
-        self._status = ("idle", None)
-        self._do(lambda db: db.heartbeat("idle", version=VERSION))
+        self._status = ("closed", None)
+        self._do(lambda db: db.heartbeat("closed", version=VERSION))
         self._do(lambda db: self._stopped.set())
         self._stopped.wait(timeout=2.0)
 
@@ -202,7 +202,7 @@ class DashboardLink:
     def take_commands(self):
         """The dashboard's button presses since the last call, as a list of
         (command, details) pairs, e.g. ("recalibrate", {}) or
-        ("set_dwell_time", {"dwell_time_ms": 3000})."""
+        ("cancel_recalibration", {})."""
         found = []
         while True:
             try:
@@ -234,6 +234,23 @@ class DashboardLink:
                 self._recal_id = None
         self._do(job)
 
+    def recalibration_cancelled(self):
+        """Stop calibration was pressed on the dashboard: the recalibration
+        is closed without a result, so it doesn't count in the
+        Recalibration Success Rate (neither a success nor a failure)."""
+        if not self.enabled:
+            return
+        self._recal_open = False
+
+        def job(db):
+            if self._recal_id is not None:
+                db.cancel_recalibration(self._recal_id)
+                self._recal_id = None
+            elif db.active_session():
+                db.raise_alert("recalibration_cancelled", "Calibration stopped from the dashboard",
+                               severity="info")
+        self._do(job)
+
     # ---- background work ---------------------------------------------------
     def _do(self, job):
         """Hands a piece of database work to the background thread."""
@@ -253,16 +270,11 @@ class DashboardLink:
         block = db.active_test_block(session["session_id"])
         return block is not None and block["block_type"] == "free_look"
 
-    def _resume_session(self, db):
-        session = db.active_session(force=True)
-        if session:
-            self._commands.put(("set_dwell_time", {"dwell_time_ms": session["dwell_time_ms"]}))
-
     def _background(self):
         """Runs for as long as the app is open: heartbeats, dashboard
         commands, and the waiting database work, in that order."""
         next_heartbeat = next_commands = 0.0
-        while True:
+        while not self._stopped.is_set():   # set by stop(): the app is closing
             try:
                 now = time.time()
                 if now >= next_heartbeat:

@@ -66,7 +66,7 @@ def build_summary_pdf(s, m, checks, selections, alerts, anonymise=False, detaile
     story = [
         Paragraph("EyeGlynt — Session Summary", h1),
         Paragraph(f"Session {s['session_code'].strip()} · "
-                  f"{'Test Mode (formal evaluation)' if s['mode'] == 'test' else 'Normal Mode'}", small),
+                  f"{' · Test Mode (old)' if s['mode'] == 'test' else ''}", small),
         Spacer(1, 6),
         Paragraph("Patient &amp; session", h2),
         table([
@@ -97,7 +97,8 @@ def build_summary_pdf(s, m, checks, selections, alerts, anonymise=False, detaile
     story += [Paragraph("Performance metrics", h2), mt]
     basis = ("Accuracy computed from Test Mode trials (correct ÷ trials)."
              if s["mode"] == "test" else
-             "Normal Mode: accuracy assumes selections were intended unless a caregiver flagged them.")
+             "Accuracy counts selections as intended unless they were marked Incorrect. "
+             "Selections marked Unintended are left out of every result.")
     story.append(Paragraph(basis, small))
 
     # Activity log
@@ -106,7 +107,11 @@ def build_summary_pdf(s, m, checks, selections, alerts, anonymise=False, detaile
     for r in selections:
         note = ""
         if r["intent_status"] == "unintended":
-            note = "Flagged unintended"
+            note = "Incorrect"
+        elif r["intent_status"] == "ignored":
+            note = "Unintended"
+        elif r["selection_type"] == "speak":
+            note = "Spoken"
         elif r["target_element_id"] is not None:
             note = "Correct" if r["is_correct"] else f"Missed target {r['target_element_id']}"
         log.append([r["selected_at"].strftime("%H:%M:%S"),
@@ -157,12 +162,14 @@ def _caregiver_pdf(doc, s, m, selections, h1, h2, body, small, table):
         Paragraph(f"Activity log ({len(selections)} selections)", h2),
     ]
     if selections:
-        rows = [["Time", "Interface", "What was said"]]
+        rows = [["Time", "Interface", "What was said", "Note"]]
+        notes = {"unintended": "Incorrect", "ignored": "Unintended"}
         for r in selections:
+            note = notes.get(r["intent_status"]) or ("Spoken" if r["selection_type"] == "speak" else "")
             rows.append([r["selected_at"].strftime("%I:%M:%S %p"),
                          "Quick-Fire" if r["interface"] == "quickfire" else "Keyboard",
-                         Paragraph(escape(r["output_text"]), body)])
-        story.append(table(rows, [28 * mm, 28 * mm, 118 * mm]))
+                         Paragraph(escape(r["output_text"]), body), note])
+        story.append(table(rows, [26 * mm, 24 * mm, 88 * mm, 36 * mm]))
     else:
         story.append(Paragraph("No selections were recorded.", small))
     story.append(Paragraph("Caregiver notes", h2))

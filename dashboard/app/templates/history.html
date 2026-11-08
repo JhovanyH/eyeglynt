@@ -22,7 +22,7 @@
     <div class="table-wrap">
       <table class="data" {% if not detailed %}style="min-width:480px"{% endif %}>
         <thead><tr>
-          <th>Session</th><th>Patient</th><th>Date</th><th>Duration</th>{% if detailed %}<th>Mode</th>{% endif %}
+          <th>Session</th><th>Patient</th><th>Date</th><th>Duration</th>
           <th class="num">Selections</th>
           {% if detailed %}<th class="num">Accuracy</th><th class="num">FPR</th>
           <th class="num">Latency</th><th class="num">Recal.</th>{% endif %}
@@ -35,7 +35,6 @@
             <td>{{ r.patient_name }}</td>
             <td>{{ r.started_at|date }}</td>
             <td class="tabular">{{ r.duration_s|duration }}</td>
-            {% if detailed %}<td><span class="pill {{ 'kb' if r.mode == 'test' else 'muted' }}">{{ r.mode|capitalize }}</span></td>{% endif %}
             <td class="num">{{ r.total_selections if r.total_selections is not none else '—' }}</td>
             {% if detailed %}
             {{ num(r, 'gaze_accuracy_pct', '%') }}

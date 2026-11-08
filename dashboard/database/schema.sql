@@ -19,9 +19,9 @@ CREATE TABLE caregivers (
                        'Researcher','Other') NOT NULL,
   contact_number  VARCHAR(20)  NOT NULL,
   username        VARCHAR(40)  NOT NULL,
-  password_hash   VARCHAR(255) NOT NULL,          -- werkzeug.security hash, never plain text
+  password        VARCHAR(255) NOT NULL,          -- stored as typed (team decision, 2026-11-08)
   account_type    ENUM('caregiver','researcher') NOT NULL DEFAULT 'caregiver',
-                  -- caregiver: Normal Mode + simple summary; researcher: Test Mode + full metrics
+                  -- caregiver: simple summary; researcher: full metrics summary
   is_active       TINYINT(1)   NOT NULL DEFAULT 1,
   created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   last_login_at   DATETIME     NULL,
@@ -70,7 +70,7 @@ CREATE TABLE sessions (
   care_setting        ENUM('Home','Hospital','Rehabilitation / Therapy Center',
                            'Long-term Care Facility','Other') NOT NULL,
   mode                ENUM('normal','test') NOT NULL DEFAULT 'normal',
-  dwell_time_ms       SMALLINT UNSIGNED NOT NULL DEFAULT 1500,
+  dwell_time_ms       SMALLINT UNSIGNED NOT NULL DEFAULT 4000,   -- the device's fixed 4 s
   profile_id          INT UNSIGNED NULL,           -- calibration profile in use
   pre_session_notes   TEXT NULL,
   post_session_notes  TEXT NULL,
@@ -90,7 +90,7 @@ CREATE TABLE sessions (
     REFERENCES calibration_profiles(profile_id) ON DELETE SET NULL
 ) ENGINE=InnoDB;
 
--- Test Mode only: groups selections into the thesis test procedures.
+-- Test Mode only (no longer used since 2026-11-08; kept for old sessions): groups selections into the thesis test procedures.
 --   accuracy  = 30 highlighted-target trials (Gaze Selection Accuracy)
 --   free_look = user looks around without intending to select (False Positives)
 CREATE TABLE test_blocks (
@@ -127,7 +127,7 @@ CREATE TABLE selections (
   is_correct        TINYINT(1)   AS (IF(target_element_id IS NULL, NULL,
                                       element_id = target_element_id)) PERSISTENT,
   -- Normal Mode ground truth: caregiver review from the Live log
-  intent_status     ENUM('unreviewed','intended','unintended') NOT NULL DEFAULT 'unreviewed',
+  intent_status     ENUM('unreviewed','intended','unintended','ignored') NOT NULL DEFAULT 'unreviewed',
   reviewed_by       INT UNSIGNED NULL,
   reviewed_at       DATETIME NULL,
   KEY ix_sel_session_time (session_id, selection_id),   -- polling: WHERE session_id=? AND selection_id > ?
@@ -145,7 +145,8 @@ CREATE TABLE system_alerts (
   session_id      INT UNSIGNED NULL,               -- NULL if raised with no session running
   alert_type      ENUM('lighting_shift','gaze_lock_loss','gaze_lock_restored',
                        'recalibration_started','recalibration_success','recalibration_failed',
-                       'calibration_required','system') NOT NULL,
+                       'recalibration_cancelled','calibration_required','session_auto_ended',
+                       'system') NOT NULL,
   severity        ENUM('info','warning','critical') NOT NULL DEFAULT 'warning',
   message         VARCHAR(255) NOT NULL,
   event_at        DATETIME(3)  NULL,               -- when the condition began (first affected frame)
@@ -189,7 +190,7 @@ CREATE TABLE device_commands (
   command_id     INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   session_id     INT UNSIGNED NULL,
   command        ENUM('start_session','end_session','recalibrate','set_dwell_time',
-                      'start_test_block','end_test_block') NOT NULL,
+                      'start_test_block','end_test_block','cancel_recalibration') NOT NULL,
   payload        JSON NULL,                        -- e.g. {"dwell_time_ms":1800}
   issued_by      INT UNSIGNED NULL,
   issued_at      DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
@@ -204,7 +205,7 @@ CREATE TABLE device_commands (
 CREATE TABLE device_status (
   device_id        TINYINT UNSIGNED PRIMARY KEY DEFAULT 1,
   last_heartbeat   DATETIME(3) NULL,
-  tracking_state   ENUM('idle','calibrating','tracking','lost') NOT NULL DEFAULT 'idle',
+  tracking_state   ENUM('idle','calibrating','tracking','lost','closed') NOT NULL DEFAULT 'idle',
   fps              DECIMAL(5,1) NULL,
   current_lux      DECIMAL(7,1) NULL,
   active_profile_id INT UNSIGNED NULL,
@@ -265,6 +266,7 @@ LEFT JOIN (
              OR COALESCE(b.block_type = 'free_look', 0)), 0)  AS unintended
   FROM selections x
   LEFT JOIN test_blocks b ON b.block_id = x.block_id
+  WHERE x.intent_status <> 'ignored'      -- "Ignore" in the activity log: left out of every metric
   GROUP BY x.session_id
 ) sel ON sel.session_id = s.session_id
 LEFT JOIN (

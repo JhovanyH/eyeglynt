@@ -58,7 +58,7 @@ gunicorn -w 2 -b 0.0.0.0:5000 run:app
 To open the dashboard from a phone on the same Wi-Fi:
 
 1. Find the Pi's address by running `hostname -I` on the Pi.
-2. On the phone, open `http://<pi-ip>:5000`.
+2. On the phone, open `https://<pi-ip>:5000` (tap Advanced, then Proceed, the first time).
 
 ---
 
@@ -144,12 +144,16 @@ for cmd in db.poll_commands():
 
 The metrics come from the `v_session_metrics` view in `database/schema.sql`. When a session ends, they are frozen into `session_metrics`.
 
-| Metric | Test Mode (use for thesis results) | Normal Mode |
-|---|---|---|
-| Gaze Selection Accuracy | correct ÷ trials in the 30-trial accuracy test | selections not flagged ÷ all selections |
-| False Positive Rate | (free-look activations + flagged) ÷ all activations | flagged ÷ all activations |
-| Detection Latency | average of `detected_at − event_at` for lighting-shift and gaze-lock-loss alerts | same |
-| Recalibration Success | successful ÷ completed recalibrations | same |
+Since 8 November 2026 there is one session mode for everyone (Test Mode was removed; old test sessions still show their results). Researchers see every metric; caregivers see the simple summary.
+
+| Metric | How it is computed |
+|---|---|
+| Gaze Selection Accuracy | selections not marked Incorrect ÷ all counted selections |
+| False Positive Rate | selections marked Incorrect ÷ all counted selections |
+| Detection Latency | average of `detected_at − event_at` for lighting-shift and gaze-lock-loss alerts |
+| Recalibration Success | successful ÷ finished recalibrations (a calibration stopped from the dashboard is not counted) |
+
+In the activity log, **Incorrect** (stored as `unintended`) counts against accuracy, and **Unintended** (stored as `ignored`) is left out of every metric. The dwell time is fixed at 4 s (`DWELL_TIME` in main.py). The dashboard runs on HTTPS with a self-made certificate (`certs/`, made by setup_dashboard.sh). When the EyeGlynt app is closed, the dashboard ends the running session by itself. Passwords are stored as typed (team decision), in the `password` column.
 
 The benchmarks (from thesis Table 7) are set in `app/constants.py`. Tiles turn green when a metric meets its benchmark and red when it falls below.
 

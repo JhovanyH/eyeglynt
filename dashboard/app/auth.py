@@ -6,12 +6,25 @@ from functools import wraps
 from flask import (Blueprint, abort, current_app, flash, redirect, render_template, request,
                    session, url_for)
 from flask_login import UserMixin, current_user, login_required, login_user, logout_user
-from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.security import check_password_hash
 
 from . import db, login_manager
 from .constants import ROLES
 
 bp = Blueprint("auth", __name__)
+
+# Passwords are saved exactly as typed, so the team can read them in
+# HeidiSQL (decision of 2026-11-08). Accounts made before that still hold a
+# scrambled (hashed) password; it is replaced by the plain one the first
+# time that person logs in.
+HASH_PREFIXES = ("scrypt:", "pbkdf2:")
+
+
+def password_matches(stored, given):
+    if stored.startswith(HASH_PREFIXES):
+        return check_password_hash(stored, given)
+    return hmac.compare_digest(stored.encode(), given.encode())
+
 
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_.]{3,40}$")
 PHONE_RE = re.compile(r"^(\+63|0)9\d{9}$")  # PH mobile: 09XXXXXXXXX or +639XXXXXXXXX
@@ -40,7 +53,7 @@ class Caregiver(UserMixin):
 
 
 def researcher_required(view):
-    """Only researcher accounts may run Test Mode or see full metrics."""
+    """Only researcher accounts may see the full metrics and the history."""
     @wraps(view)
     @login_required
     def wrapped(*args, **kwargs):
@@ -60,7 +73,9 @@ def load_user(user_id):
 
 @bp.route("/login", methods=["GET", "POST"])
 def login():
-    if current_user.is_authenticated:
+    # Already logged in: opening the page goes straight on, but typing a
+    # username and password is always checked (no skipping a wrong password).
+    if current_user.is_authenticated and request.method == "GET":
         return redirect(url_for("sessions.home"))
     form = {}
     if request.method == "POST":
@@ -70,13 +85,15 @@ def login():
         row = db.query(
             "SELECT * FROM caregivers WHERE username=%s AND is_active=1", (username,), one=True
         )
-        if row and check_password_hash(row["password_hash"], password):
+        if row and password_matches(row["password"], password):
             login_user(Caregiver(row), remember=bool(form.get("remember")))
-            db.execute("UPDATE caregivers SET last_login_at=NOW() WHERE caregiver_id=%s",
-                       (row["caregiver_id"],))
+            db.execute("UPDATE caregivers SET last_login_at=NOW(), password=%s WHERE caregiver_id=%s",
+                       (password, row["caregiver_id"]))
             db.commit()
             nxt = request.args.get("next") or session.pop("next", None)
             return redirect(nxt if nxt and nxt.startswith("/") else url_for("sessions.home"))
+        if current_user.is_authenticated:
+            logout_user()   # a wrong password also ends the earlier login
         flash("Incorrect username or password.", "error")
     return render_template("auth.html", tab="login", form=form, roles=ROLES, errors={})
 
@@ -125,10 +142,10 @@ def register():
         if not errors:
             db.execute(
                 """INSERT INTO caregivers
-                   (first_name, last_name, role, contact_number, username, password_hash, account_type)
+                   (first_name, last_name, role, contact_number, username, password, account_type)
                    VALUES (%s,%s,%s,%s,%s,%s,%s)""",
                 (form["first_name"], form["last_name"], form["role"], phone,
-                 form["username"], generate_password_hash(password), account_type),
+                 form["username"], password, account_type),
             )
             db.commit()
             flash("Account created. You can now log in.", "success")

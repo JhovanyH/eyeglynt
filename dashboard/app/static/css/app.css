@@ -211,8 +211,19 @@ select.input { appearance: none; padding-right: 36px;
              font-size: 12px; color: var(--muted); cursor: pointer; display: inline-flex; gap: 4px;
              align-items: center; min-height: 30px; }
 .log .flag:hover { border-color: var(--bad); color: var(--bad); }
-.log li.unintended .flag { background: var(--bad-soft); color: var(--bad); border-color: #FCA5A5; }
+.log li.unintended .flag.unintended-btn { background: var(--bad-soft); color: var(--bad); border-color: #FCA5A5; }
 .log .tag { font-size: 11px; font-weight: 600; }
+/* Ignore: left out of every metric */
+.log .marks { display: inline-flex; gap: 6px; }
+.log .marks .lbl { display: none; }           /* icon only until the button is on */
+.log li.unintended .unintended-btn .lbl, .log li.ignored .ignore .lbl { display: inline; }
+.log .marks .flag { min-width: 34px; justify-content: center; }
+.log .flag.ignore:hover { border-color: var(--muted); color: var(--ink); }
+.log li.ignored .txt { color: var(--muted); font-style: italic; }
+.log li.ignored .flag.ignore { background: var(--bg); color: var(--ink); border-color: var(--muted); }
+/* Spoken sentences (Speak button) stand out */
+.log li.spoken .txt { font-weight: 600; }
+.log .spoke { font-size: 11px; font-weight: 600; margin-right: 6px; }
 .log-scroll { max-height: 420px; overflow-y: auto; margin: 0 -4px; padding: 0 4px; }
 .empty { text-align: center; color: var(--muted); padding: 28px 8px; font-size: 14px; }
 
@@ -294,12 +305,12 @@ select.input { appearance: none; padding-right: 36px;
 @media (min-width: 900px) { .log.alerts { max-height: 560px; } }
 
 /* Accuracy test: Correct / Wrong buttons on each selection */
-.log .score { display: inline-flex; gap: 6px; margin-left: 8px; vertical-align: middle; }
-.score-btn { font: inherit; font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 999px;
-             border: 1px solid var(--line); background: #fff; color: var(--muted); cursor: pointer; }
-.score-btn.correct:hover, .score-btn.correct.on { border-color: var(--ok); color: var(--ok); }
-.score-btn.wrong:hover, .score-btn.wrong.on { border-color: var(--bad); color: var(--bad); }
-.score-btn.correct.on { background: var(--ok-soft); }
-.score-btn.wrong.on { background: var(--bad-soft); }
-.score-btn:disabled { opacity: .6; cursor: wait; }
 #test-unmarked[hidden] { display: none; }
+
+/* Buttons with the hidden attribute (e.g. Stop calibration) really hide */
+.btn[hidden] { display: none; }
+/* Phones: the Unintended / Ignore buttons go on their own line under the text */
+@media (max-width: 560px) {
+  .log li:has(.marks) { grid-template-columns: auto auto 1fr; }
+  .log li .marks { grid-column: 1 / -1; justify-content: flex-end; }
+}

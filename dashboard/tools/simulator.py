@@ -65,6 +65,12 @@ class Simulator:
             self.log(f"command: {c} {p or ''}")
             if c == "recalibrate":
                 self.begin_recal("manual_caregiver")
+            elif c == "cancel_recalibration" and self.recal:
+                # Stop calibration on the dashboard (like main.py does)
+                self.db.cancel_recalibration(self.recal[0])
+                self.log("recalibration stopped from the dashboard")
+                self.recal = None
+                self.state = "tracking"
             elif c == "start_session":
                 self.next_sel = time.time() + self._j(3)
             self.db.complete_command(cmd["command_id"])
