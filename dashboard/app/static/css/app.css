@@ -215,6 +215,9 @@ select.input { appearance: none; padding-right: 36px;
 .log .tag { font-size: 11px; font-weight: 600; }
 /* Ignore: left out of every metric */
 .log .marks { display: inline-flex; gap: 6px; }
+.log .marks .lbl { display: none; }           /* icon only until the button is on */
+.log li.unintended .unintended-btn .lbl, .log li.ignored .ignore .lbl { display: inline; }
+.log .marks .flag { min-width: 34px; justify-content: center; }
 .log .flag.ignore:hover { border-color: var(--muted); color: var(--ink); }
 .log li.ignored .txt { color: var(--muted); font-style: italic; }
 .log li.ignored .flag.ignore { background: var(--bg); color: var(--ink); border-color: var(--muted); }

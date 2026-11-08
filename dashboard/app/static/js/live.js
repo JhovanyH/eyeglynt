@@ -84,10 +84,13 @@
     const marks = el("span", "marks");
     const flag = el("button", "flag unintended-btn");
     flag.type = "button";
+    // Only the icons show; the word appears once the button is on.
     flag.appendChild(icon("flag"));
-    flag.appendChild(el("span", null, "Unintended"));
-    const ignore = el("button", "flag ignore", "Ignore");
+    flag.appendChild(el("span", "lbl", "Unintended"));
+    const ignore = el("button", "flag ignore");
     ignore.type = "button";
+    ignore.appendChild(icon("ignore"));
+    ignore.appendChild(el("span", "lbl", "Ignored"));
     flag.addEventListener("click", () => setIntent(li, s.id, "unintended"));
     ignore.addEventListener("click", () => setIntent(li, s.id, "ignored"));
     marks.append(flag, ignore);
@@ -103,7 +106,6 @@
     const flag = li.querySelector(".unintended-btn"), ignore = li.querySelector(".ignore");
     flag.title = intent === "unintended" ? "Marked unintended. Tap to undo" : "Mark as unintended (a mistake)";
     ignore.title = intent === "ignored" ? "Ignored. Tap to count it again" : "Ignore: leave it out of the results";
-    ignore.textContent = intent === "ignored" ? "Ignored" : "Ignore";
     flag.setAttribute("aria-pressed", intent === "unintended" ? "true" : "false");
     ignore.setAttribute("aria-pressed", intent === "ignored" ? "true" : "false");
     flag.setAttribute("aria-label", flag.title);
