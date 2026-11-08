@@ -584,9 +584,9 @@ def _neighbourhood(image, size, combine):
     return np.max(shifted, axis=0)
 
 
-def _remove_glints(crop, limit):
-    """Paints over the glints (pixels brighter than `limit`), working
-    inwards from their edges.
+def _remove_glints(crop, limit, where=None):
+    """Paints over the glints (pixels brighter than `limit`; only those
+    where `where` is True, if given), working inwards from their edges.
 
     A glint often sits ON the pupil. Left alone, it would punch a bright
     hole in the pupil and pull the pupil centre away. Each round, every
@@ -594,8 +594,11 @@ def _remove_glints(crop, limit):
     neighbours, so a glint on the pupil becomes pupil-dark and a glint on
     the iris becomes iris-coloured.
     """
+    bright = crop > limit
+    if where is not None:
+        bright &= where
     # Glint pixels, plus 1 pixel of glow around them.
-    glint = _neighbourhood(crop > limit, 1, "max") > 0
+    glint = _neighbourhood(bright, 1, "max") > 0
     result = crop.astype(float)
     for _ in range(10):  # 10 rounds fills glints up to 20 pixels across
         if not glint.any():
@@ -645,9 +648,12 @@ def find_pupil(gray, cx, cy, iris_radius):
     if not ring.any() or not middle.any():
         return None
 
-    # Steps 1-3.
+    # Steps 1-3. Only glints that can touch the pupil area are painted
+    # over (painting the bright skin and eye white further out would only
+    # cost time: those pixels don't count anyway).
     glint_limit = np.median(crop[ring]) + PUPIL_GLINT_CONTRAST
-    smooth = _neighbourhood(_remove_glints(crop, glint_limit), 1, "mean")
+    near_pupil = distance_sq <= (PUPIL_MAX_SIZE * radius + 2) ** 2
+    smooth = _neighbourhood(_remove_glints(crop, glint_limit, near_pupil), 1, "mean")
     iris = np.median(smooth[ring])
     pupil = np.percentile(smooth[middle], 5)
     if iris - pupil < PUPIL_MIN_CONTRAST:
