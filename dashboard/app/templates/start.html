@@ -86,10 +86,10 @@
 
   <section class="card">
     <h2 class="card-title"><svg class="icon"><use href="#i-gear"/></svg> Session settings</h2>
-    <p class="notice" style="margin:0 0 12px">
-      <svg class="icon"><use href="#i-info"/></svg>
-      <span>Dwell time: 4 seconds (EyeGlynt's default for every session).</span>
-    </p>
+    <label class="field">
+      <span>Dwell time</span>
+      <input class="input" value="4 seconds" readonly aria-readonly="true">
+    </label>
     <label class="field">
       <span>Session note (optional)</span>
       <textarea class="input" name="notes" placeholder="e.g. Patient is fatigued today…">{{ form.get('notes','') }}</textarea>

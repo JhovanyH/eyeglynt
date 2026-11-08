@@ -60,8 +60,11 @@
 
   // ---------------------------------------------------------------- activity log
   // Each selection has two buttons:
-  //   Unintended - a mistake: counts against accuracy / false positives
-  //   Ignore     - left out of every metric (e.g. a word that can't be judged)
+  //   Incorrect  (database: "unintended") - wrong selection: counts against
+  //              accuracy / false positives
+  //   Unintended (database: "ignored")    - wasn't meant to be selected:
+  //              left out of every metric
+  // Only the button labels changed on 8 Nov; the database values stayed.
   function renderSelection(s, isNew) {
     const li = el("li", (isNew ? "is-new" : ""));
     li.dataset.id = s.id;
@@ -86,11 +89,11 @@
     flag.type = "button";
     // Only the icons show; the word appears once the button is on.
     flag.appendChild(icon("flag"));
-    flag.appendChild(el("span", "lbl", "Unintended"));
+    flag.appendChild(el("span", "lbl", "Incorrect"));
     const ignore = el("button", "flag ignore");
     ignore.type = "button";
     ignore.appendChild(icon("ignore"));
-    ignore.appendChild(el("span", "lbl", "Ignored"));
+    ignore.appendChild(el("span", "lbl", "Unintended"));
     flag.addEventListener("click", () => setIntent(li, s.id, "unintended"));
     ignore.addEventListener("click", () => setIntent(li, s.id, "ignored"));
     marks.append(flag, ignore);
@@ -104,8 +107,9 @@
     li.classList.toggle("unintended", intent === "unintended");
     li.classList.toggle("ignored", intent === "ignored");
     const flag = li.querySelector(".unintended-btn"), ignore = li.querySelector(".ignore");
-    flag.title = intent === "unintended" ? "Marked unintended. Tap to undo" : "Mark as unintended (a mistake)";
-    ignore.title = intent === "ignored" ? "Ignored. Tap to count it again" : "Ignore: leave it out of the results";
+    flag.title = intent === "unintended" ? "Marked incorrect. Tap to undo" : "Mark as incorrect";
+    ignore.title = intent === "ignored" ? "Marked unintended (not counted). Tap to undo"
+                                        : "Mark as unintended: left out of the results";
     flag.setAttribute("aria-pressed", intent === "unintended" ? "true" : "false");
     ignore.setAttribute("aria-pressed", intent === "ignored" ? "true" : "false");
     flag.setAttribute("aria-label", flag.title);
@@ -120,7 +124,7 @@
     try {
       await post(withId(D.flagUrl, id), { intent: intent });
       showIntent(li, intent);
-      toast({ unintended: "Marked as unintended", ignored: "Ignored: not counted in the results",
+      toast({ unintended: "Marked as incorrect", ignored: "Marked as unintended: not counted in the results",
               intended: "Mark removed" }[intent]);
       poll();
     } catch (e) { toast(e.message); }

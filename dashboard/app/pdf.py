@@ -97,8 +97,8 @@ def build_summary_pdf(s, m, checks, selections, alerts, anonymise=False, detaile
     story += [Paragraph("Performance metrics", h2), mt]
     basis = ("Accuracy computed from Test Mode trials (correct ÷ trials)."
              if s["mode"] == "test" else
-             "Accuracy counts selections as intended unless they were marked Unintended. "
-             "Ignored selections are left out of every result.")
+             "Accuracy counts selections as intended unless they were marked Incorrect. "
+             "Selections marked Unintended are left out of every result.")
     story.append(Paragraph(basis, small))
 
     # Activity log
@@ -107,9 +107,9 @@ def build_summary_pdf(s, m, checks, selections, alerts, anonymise=False, detaile
     for r in selections:
         note = ""
         if r["intent_status"] == "unintended":
-            note = "Flagged unintended"
+            note = "Incorrect"
         elif r["intent_status"] == "ignored":
-            note = "Ignored (not counted)"
+            note = "Unintended (not counted)"
         elif r["selection_type"] == "speak":
             note = "Spoken"
         elif r["target_element_id"] is not None:
@@ -163,7 +163,7 @@ def _caregiver_pdf(doc, s, m, selections, h1, h2, body, small, table):
     ]
     if selections:
         rows = [["Time", "Interface", "What was said", "Note"]]
-        notes = {"unintended": "Unintended", "ignored": "Ignored (not counted)"}
+        notes = {"unintended": "Incorrect", "ignored": "Unintended (not counted)"}
         for r in selections:
             note = notes.get(r["intent_status"]) or ("Spoken" if r["selection_type"] == "speak" else "")
             rows.append([r["selected_at"].strftime("%I:%M:%S %p"),

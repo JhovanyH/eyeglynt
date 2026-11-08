@@ -41,8 +41,8 @@
           <span class="pill {{ 'qf' if r.interface == 'quickfire' else 'kb' }}">{{ 'Quick-Fire' if r.interface == 'quickfire' else 'Keyboard' }}</span>
           <span class="txt">{% if r.selection_type == 'speak' %}<span class="spoke pill ok">Spoken</span>{% endif %}{{ r.output_text }}
             {% if show_test_marks and r.target_element_id is not none %}<span class="tag pill {{ 'ok' if r.is_correct else 'bad' }}">{{ '✓ target' if r.is_correct else '✗ missed' }}</span>{% endif %}
-            {% if r.intent_status == 'unintended' %}<span class="tag pill bad">not intended</span>{% endif %}
-            {% if r.intent_status == 'ignored' %}<span class="tag pill muted">ignored, not counted</span>{% endif %}
+            {% if r.intent_status == 'unintended' %}<span class="tag pill bad">incorrect</span>{% endif %}
+            {% if r.intent_status == 'ignored' %}<span class="tag pill muted">unintended, not counted</span>{% endif %}
           </span>
         </li>
         {% endfor %}
@@ -131,12 +131,12 @@
         {{ total_tile() }}
         {{ metric_tile('avg_detection_latency_ms', m.avg_detection_latency_ms, 'ms', m.latency_events ~ ' events') }}
         {{ metric_tile('recalibration_success_pct', m.recalibration_success_pct, '%', m.recalibration_attempts ~ ' recalibrations') }}
-        {{ metric_tile('false_positive_pct', m.false_positive_pct, '%', m.unintended_selections ~ ' unintended') }}
+        {{ metric_tile('false_positive_pct', m.false_positive_pct, '%', m.unintended_selections ~ ' incorrect') }}
         {{ most_used_tile() }}
       </div>
       <p style="font-size:12px;color:var(--muted);margin:8px 2px 0">
         {% if s.mode == 'test' %}Accuracy = correct ÷ trials in accuracy tests. False positives include all free-look activations.
-        {% else %}Accuracy counts every selection as intended unless it was marked Unintended. Ignored selections are left out of every result.{% endif %}
+        {% else %}Accuracy counts every selection as intended unless it was marked Incorrect. Selections marked Unintended are left out of every result.{% endif %}
       </p>
     </section>
   </div>
