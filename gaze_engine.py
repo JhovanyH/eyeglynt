@@ -84,6 +84,17 @@ MODEL_URL = (
 # is only sharp within a few centimetres of this distance, so measure
 # from the camera to the user's eyes and set it here.
 PI_FOCUS_DISTANCE_M = 0.4
+# AUTOFOCUS: the lens only gives a sharp picture between about 37 and
+# 44 cm when it is fixed at 40 cm, and the eye close-ups of 2 November
+# were blurry. A blurry eye hides the pupil's edge and smears the glint,
+# so every measurement gets less precise. So the camera's own autofocus
+# (Camera Module 3) makes one quick scan whenever the calibration screen
+# opens and when Start is pressed, while the user sits where they will
+# stay; then the lens stays there for the whole session (it never moves
+# during tracking). PI_FOCUS_DISTANCE_M is only where the lens starts.
+# The distance it focused at is printed, saved in the log and shown on
+# the result screen. Set AUTOFOCUS to False to keep the fixed focus.
+AUTOFOCUS = True
 # Set this to True only if the camera is mounted upside down, i.e. if
 # the app's preview shows your face upside down. read() then turns the
 # picture the right way up first, because MediaPipe is made for upright
@@ -957,6 +968,34 @@ class _PiCamera:
         })
         time.sleep(2)  # let exposure and focus settle before the first frames
 
+    def focus(self):
+        """One autofocus scan (see AUTOFOCUS). Afterwards the lens stays
+        where the scan left it. Returns the distance it focused at, in
+        centimetres, or None if it couldn't tell. Takes about a second,
+        during which no pictures are processed."""
+        try:
+            self._picam.set_controls({"AfMode": libcamera_controls.AfModeEnum.Auto})
+            if not self._picam.autofocus_cycle():   # waits until the scan has finished
+                print("[GazeEngine] Autofocus could not find a sharp picture; the lens stays where it was")
+            lens = self._picam.capture_metadata().get("LensPosition")  # in dioptres = 1 / metres
+        except Exception as e:
+            print(f"[GazeEngine] Autofocus failed: {e}")
+            return None
+        if not lens:
+            return None
+        print(f"[GazeEngine] Autofocus: sharp at {100.0 / lens:.0f} cm")
+        return 100.0 / lens
+
+    def describe(self):
+        """The camera's mode and the part of the sensor in use, as text,
+        for working out how many pixels the eyes get."""
+        try:
+            sensor = self._picam.camera_configuration().get("sensor", {})
+            crop = self._picam.capture_metadata().get("ScalerCrop")
+            return f"sensor mode {sensor.get('output_size')}, sensor area used {crop}"
+        except Exception as e:
+            return f"unknown ({e})"
+
     def read(self):
         frame = self._picam.capture_array()
         if PI_CAMERA_UPSIDE_DOWN:
@@ -1008,8 +1047,12 @@ class GazeEngine:
         self._latest_face_size = None  # smoothed face size, shared with the Kivy thread
         self._latest_head = None       # smoothed _head_pose, None if no face seen
         self._latest_debug_frame = None  # RGB numpy frame with dots drawn, for a live preview
-        self._latest_eyes = None  # (full frame, glint/pupil points, iris centres) for close-ups
+        self._latest_eyes = None  # (full frame, glint/pupil points, iris centres, landmarks,
+                                  #  picture number) for close-ups and eye pictures
         self._fps = None          # pictures processed per second, measured
+        self._focus_requested = AUTOFOCUS  # True: make an autofocus scan (see AUTOFOCUS)
+        self._focus_cm = None     # the distance the autofocus focused at, in cm
+        self.camera_mode = ""     # the camera's mode (see _PiCamera.describe)
         self._running = False
         self._thread = None
         self._camera_ok = True  # flips False if the camera can't be opened
@@ -1082,18 +1125,35 @@ class GazeEngine:
             self._running = False
             return
 
+        describe = getattr(camera, "describe", None)
+        if describe is not None:
+            self.camera_mode = describe()
+            print(f"[GazeEngine] Camera: {self.camera_mode}")
         start_time = time.time()
         # Frame rate, and where the time goes, measured over 5 seconds at
         # a time and printed (seconds spent on each step, all pictures).
         fps_count, fps_start = 0, time.time()
         spent = {"camera": 0.0, "MediaPipe": 0.0, "eyes": 0.0}
+        picture_number = 0
         while self._running:
+            if self._focus_requested:
+                # An autofocus scan was asked for (see request_focus). It is
+                # done here, between two pictures, because the camera may
+                # only be used from this thread.
+                self._focus_requested = False
+                focus = getattr(camera, "focus", None)   # the laptop webcam has none
+                if focus is not None:
+                    distance = focus()
+                    if distance is not None:
+                        self._focus_cm = distance
+                fps_count, fps_start = 0, time.time()   # don't count the scan's pause in the fps
             step_start = time.time()
             frame = camera.read()  # full-size RGB picture
             if frame is None:
                 continue
             spent["camera"] += time.time() - step_start
             fps_count += 1
+            picture_number += 1
             if time.time() - fps_start >= 5:
                 self._fps = fps_count / (time.time() - fps_start)
                 times = ", ".join(f"{name} {seconds / fps_count * 1000:.0f} ms" for name, seconds in spent.items())
@@ -1143,7 +1203,7 @@ class GazeEngine:
                 fh, fw = frame.shape[:2]
                 iris_centres = [(landmarks[i].x * fw, landmarks[i].y * fh)
                                 for i in (RIGHT_IRIS_CENTER, LEFT_IRIS_CENTER)]
-                eyes = (frame, points, iris_centres)
+                eyes = (frame, points, iris_centres, landmarks, picture_number)
 
                 # Each eye's glint measurements are smoothed separately and
                 # then averaged, so the result doesn't jump when one eye's
@@ -1202,6 +1262,45 @@ class GazeEngine:
         """Pictures processed per second, or None until it's measured."""
         return self._fps
 
+    def request_focus(self):
+        """Asks for one autofocus scan (see AUTOFOCUS). It happens in the
+        background within a moment; the pointer pauses for about a second."""
+        if AUTOFOCUS:
+            self._focus_requested = True
+
+    def get_focus_distance_cm(self):
+        """The distance the last autofocus scan focused at (camera to the
+        face), in centimetres, or None if unknown."""
+        return self._focus_cm
+
+    def get_eye_picture(self):
+        """A picture of both eyes at the camera's full detail, for the
+        calibration's eye pictures (SAVE_EYE_PICTURES in main.py): they
+        let the eye measurements be checked and improved on real eyes.
+        Returns (picture number, grayscale picture as a numpy array, the
+        position of its top-left corner (x, y) in the camera picture, all
+        478 face landmarks as (x, y) in camera-picture pixels), or None
+        if no face is seen. The picture number tells pictures apart: the
+        same number means the same camera picture."""
+        with self._lock:
+            eyes = self._latest_eyes
+        if eyes is None:
+            return None
+        frame, _points, _centres, landmarks, number = eyes
+        h, w = frame.shape[:2]
+        pixels = np.array([(lm.x * w, lm.y * h) for lm in landmarks])
+        around_eyes = pixels[RIGHT_EYE_CONTOUR + LEFT_EYE_CONTOUR]
+        # Both eyes, with a margin of a quarter of the distance between the
+        # outer eye corners on every side (eyebrows and cheeks are not needed).
+        margin = 0.25 * np.hypot(*(pixels[FACE_SIZE_CORNERS[0]] - pixels[FACE_SIZE_CORNERS[1]]))
+        x0 = int(max(0, around_eyes[:, 0].min() - margin))
+        x1 = int(min(w, around_eyes[:, 0].max() + margin))
+        y0 = int(max(0, around_eyes[:, 1].min() - margin))
+        y1 = int(min(h, around_eyes[:, 1].max() + margin))
+        part = frame[y0:y1, x0:x1]
+        gray = part.mean(axis=2) if part.ndim == 3 else part
+        return number, np.round(gray).astype(np.uint8), (x0, y0), pixels
+
     def get_eye_closeup(self, half_size=40, zoom=4):
         """Returns a picture of both eyes side by side, enlarged `zoom`
         times, with the glints marked in red and the pupils in blue, for
@@ -1211,7 +1310,7 @@ class GazeEngine:
             eyes = self._latest_eyes
         if eyes is None:
             return None
-        frame, points, iris_centres = eyes
+        frame, points, iris_centres = eyes[:3]
         size = 2 * half_size
         crops = []
         for cx, cy in iris_centres:
