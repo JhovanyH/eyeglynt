@@ -109,7 +109,7 @@ def build_summary_pdf(s, m, checks, selections, alerts, anonymise=False, detaile
         if r["intent_status"] == "unintended":
             note = "Incorrect"
         elif r["intent_status"] == "ignored":
-            note = "Unintended (not counted)"
+            note = "Unintended"
         elif r["selection_type"] == "speak":
             note = "Spoken"
         elif r["target_element_id"] is not None:
@@ -163,7 +163,7 @@ def _caregiver_pdf(doc, s, m, selections, h1, h2, body, small, table):
     ]
     if selections:
         rows = [["Time", "Interface", "What was said", "Note"]]
-        notes = {"unintended": "Incorrect", "ignored": "Unintended (not counted)"}
+        notes = {"unintended": "Incorrect", "ignored": "Unintended"}
         for r in selections:
             note = notes.get(r["intent_status"]) or ("Spoken" if r["selection_type"] == "speak" else "")
             rows.append([r["selected_at"].strftime("%I:%M:%S %p"),

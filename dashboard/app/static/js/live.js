@@ -108,7 +108,7 @@
     li.classList.toggle("ignored", intent === "ignored");
     const flag = li.querySelector(".unintended-btn"), ignore = li.querySelector(".ignore");
     flag.title = intent === "unintended" ? "Marked incorrect. Tap to undo" : "Mark as incorrect";
-    ignore.title = intent === "ignored" ? "Marked unintended (not counted). Tap to undo"
+    ignore.title = intent === "ignored" ? "Marked unintended. Tap to undo"
                                         : "Mark as unintended: left out of the results";
     flag.setAttribute("aria-pressed", intent === "unintended" ? "true" : "false");
     ignore.setAttribute("aria-pressed", intent === "ignored" ? "true" : "false");
@@ -124,7 +124,7 @@
     try {
       await post(withId(D.flagUrl, id), { intent: intent });
       showIntent(li, intent);
-      toast({ unintended: "Marked as incorrect", ignored: "Marked as unintended: not counted in the results",
+      toast({ unintended: "Marked as incorrect", ignored: "Marked as unintended",
               intended: "Mark removed" }[intent]);
       poll();
     } catch (e) { toast(e.message); }

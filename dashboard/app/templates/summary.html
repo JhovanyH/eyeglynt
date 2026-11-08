@@ -42,7 +42,7 @@
           <span class="txt">{% if r.selection_type == 'speak' %}<span class="spoke pill ok">Spoken</span>{% endif %}{{ r.output_text }}
             {% if show_test_marks and r.target_element_id is not none %}<span class="tag pill {{ 'ok' if r.is_correct else 'bad' }}">{{ '✓ target' if r.is_correct else '✗ missed' }}</span>{% endif %}
             {% if r.intent_status == 'unintended' %}<span class="tag pill bad">incorrect</span>{% endif %}
-            {% if r.intent_status == 'ignored' %}<span class="tag pill muted">unintended, not counted</span>{% endif %}
+            {% if r.intent_status == 'ignored' %}<span class="tag pill muted">unintended</span>{% endif %}
           </span>
         </li>
         {% endfor %}
