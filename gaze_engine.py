@@ -78,23 +78,44 @@ MODEL_URL = (
 # gain values are needed. Exposure adapts on its own when the room
 # lighting changes or the IR LEDs are on.
 #
-# Focus is fixed at the user's working distance instead of autofocus,
-# so the lens never "hunts" in the middle of tracking. The lens position
-# is in dioptres = 1 / distance in metres (0.4 m -> 2.5). The picture
-# is only sharp within a few centimetres of this distance, so measure
-# from the camera to the user's eyes and set it here.
-PI_FOCUS_DISTANCE_M = 0.4
-# AUTOFOCUS: the lens only gives a sharp picture between about 37 and
-# 44 cm when it is fixed at 40 cm, and the eye close-ups of 2 November
-# were blurry. A blurry eye hides the pupil's edge and smears the glint,
-# so every measurement gets less precise. So the camera's own autofocus
-# (Camera Module 3) makes one quick scan whenever the calibration screen
-# opens and when Start is pressed, while the user sits where they will
-# stay; then the lens stays there for the whole session (it never moves
-# during tracking). PI_FOCUS_DISTANCE_M is only where the lens starts.
-# The distance it focused at is printed, saved in the log and shown on
-# the result screen. Set AUTOFOCUS to False to keep the fixed focus.
-AUTOFOCUS = True
+# FOCUS: the lens never moves during tracking (it would "hunt"), but
+# where it should sit depends on how far away the user sits, so the
+# app finds it itself whenever the calibration screen opens and when
+# Start is pressed (FOCUS_ON_EYES): it moves the lens step by step
+# through FOCUS_LENS_POSITIONS, measures how sharp the EYES are at each
+# step (see _eye_sharpness), goes back to the sharpest step and then
+# tries FOCUS_FINE_STEP either side of it. Lens positions are in
+# dioptres (1 / distance in metres, for visible light).
+#
+# Why not the camera's own autofocus: on 9 November it focused once on
+# the wrong part of the picture (the eyes were near the bottom of the
+# picture) and the eyes came out blurry, with the up/down accuracy and
+# the shaking about twice as bad as in the sharp calibration right after.
+# Also, the IR light (850 nm) focuses behind visible light, so the lens
+# position that is sharp for the eyes in IR is not the one for the real
+# distance: on 9 November the eyes were sharp at 4.27 dioptres ("23 cm")
+# while the face was about 55 cm from the camera. That is also why the
+# old fixed focus (2.5 dioptres, "40 cm") gave blurry eyes.
+#
+# PI_LENS_POSITION is where the lens starts (the sharp position found on
+# 9 November). Set FOCUS_ON_EYES to False to keep it there.
+PI_LENS_POSITION = 4.25
+FOCUS_ON_EYES = True
+FOCUS_LENS_POSITIONS = [2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0]
+FOCUS_FINE_STEP = 0.125
+# After the lens is told to move, pictures are thrown away until the
+# camera reports the new lens position (at most FOCUS_MAX_WAIT_PICTURES;
+# FOCUS_SETTLE_PICTURES if it doesn't report it), plus one more while
+# the lens settles; then the sharpness is measured.
+FOCUS_MAX_WAIT_PICTURES = 10
+FOCUS_SETTLE_PICTURES = 3
+# The camera lens's focal length (mm), for working out the distance to
+# the face from the iris size in the picture (see get_face_distance_cm).
+# Camera Module 3: 4.74; Camera Module 3 Wide: 2.75 (set automatically
+# when the camera reports a "wide" sensor name).
+PI_LENS_FOCAL_MM = 4.74
+PI_SENSOR_PIXEL_MM = 0.0014   # the sensor's pixel size (1.4 micrometres)
+IRIS_DIAMETER_MM = 11.7       # nearly the same in all adults
 # Set this to True only if the camera is mounted upside down, i.e. if
 # the app's preview shows your face upside down. read() then turns the
 # picture the right way up first, because MediaPipe is made for upright
@@ -147,20 +168,41 @@ GLINT_MIN_CONTRAST = 25
 # radius (about 2.5 and 5 pixels at 40 cm).
 GLINT_GAP_TOLERANCE = 0.1
 GLINT_JUMP_LIMIT = 0.2
-# The pupil is the darkest round area of the iris. find_pupil() starts
-# at the darkest point and keeps the pixels around it that are darker
-# than PUPIL_THRESHOLD of the way from that point to the typical iris
-# brightness (0.5 = halfway), within PUPIL_MAX_SIZE of the iris radius.
-PUPIL_THRESHOLD = 0.5
-PUPIL_MAX_SIZE = 0.6
-# Search areas, as a fraction of the iris radius. The pupil's darkest
-# point must lie in the middle half of the iris, so the dark eyelashes
-# and eyelid shadow at the iris edge can't be taken for it. Glints are
-# searched for only near the pupil: while the user looks at the screen,
-# an LED near the camera always reflects close to the pupil, and the
-# shiny edge of the eyelid is further out.
-PUPIL_SEARCH_SCALE = 0.9
-PUPIL_SEED_SCALE = 0.5
+# The pupil is the dark disc in the middle of the iris (the IR LEDs are
+# beside the camera, not on its axis, so the pupil looks dark).
+# find_pupil() compares each pixel near MediaPipe's iris centre with two
+# levels: the pupil's darkness (the darkest pixels within
+# PUPIL_MIDDLE_SCALE of the iris radius) and the iris's brightness (the
+# ring PUPIL_RING of the iris radius). A pixel darker than the halfway
+# level counts as pupil; near that level it counts partly, which places
+# the pupil centre to a fraction of a pixel. Only pixels within
+# PUPIL_MAX_SIZE of the iris radius count, so eyelashes and the eyelid
+# shadow at the iris edge are left out. There is no pupil (None) if it
+# isn't at least PUPIL_MIN_CONTRAST darker than the iris.
+PUPIL_MIDDLE_SCALE = 0.5
+PUPIL_RING = (0.75, 0.95)
+PUPIL_MAX_SIZE = 0.65
+PUPIL_MIN_CONTRAST = 15
+# Glints sit on the pupil and would pull its centre away; pixels at
+# least PUPIL_GLINT_CONTRAST brighter than the iris are painted over
+# with the pixels around them first (see _remove_glints).
+PUPIL_GLINT_CONTRAST = 20
+# USE_PUPIL: measure the eyes' left/right (fx) and up/down (iy) position
+# with the pupil centre found in the camera picture, instead of
+# MediaPipe's iris centre. MediaPipe estimates the iris from a small,
+# shrunk copy of the face, so it is only good to about a pixel. On the
+# sharp eye pictures of 9 November, fitted to the 15 dots, the pupil was
+# off by 0.9 cm left/right and 0.6 cm up/down on average, MediaPipe's
+# iris by 1.3 and 1.0 cm. (On blurry pictures both were the same, which
+# is one more reason for FOCUS_ON_EYES.) If the pupil isn't found in a
+# picture, MediaPipe's iris centre is used, moved by the usual distance
+# between the two, so the pointer doesn't jump. Only with the Pi's IR
+# camera: a normal webcam doesn't show the pupil clearly.
+USE_PUPIL = True
+# Glints are searched for only near the pupil, within GLINT_SEARCH_SCALE
+# of the iris radius: while the user looks at the screen, an LED near
+# the camera always reflects close to the pupil, and the shiny edge of
+# the eyelid is further out.
 GLINT_SEARCH_SCALE = 0.75
 # If a measurement is missing (a blink, a glint not found), its last
 # value is kept for a short time, then reported as unknown: the iris for
@@ -301,23 +343,32 @@ def _ensure_model_downloaded():
     print("[GazeEngine] Done.")
 
 
-def _normalized_iris_position(landmarks, iris_idx, contour_indices, w, h):
+def _normalized_iris_position(landmarks, iris_idx, contour_indices, w, h, centre=None):
+    """Where the iris centre (or `centre`, in pixels, if given) is within
+    the eye's outline: (0, 0) = top left of the outline, (1, 1) = bottom
+    right."""
     xs = [landmarks[i].x * w for i in contour_indices]
     ys = [landmarks[i].y * h for i in contour_indices]
     min_x, max_x = min(xs), max(xs)
     min_y, max_y = min(ys), max(ys)
-    iris = landmarks[iris_idx]
-    ix, iy = iris.x * w, iris.y * h
+    if centre is None:
+        iris = landmarks[iris_idx]
+        ix, iy = iris.x * w, iris.y * h
+    else:
+        ix, iy = centre
     fx = (ix - min_x) / (max_x - min_x) if max_x > min_x else 0.5
     fy = (iy - min_y) / (max_y - min_y) if max_y > min_y else 0.5
     return fx, fy
 
 
-def _compute_horizontal_feature(landmarks, w, h):
+def _compute_horizontal_feature(landmarks, w, h, centres=None):
     """fx: the iris position between the eye corners, averaged over both
-    eyes. 0 = iris at one corner, 1 = at the other."""
-    rfx, _ = _normalized_iris_position(landmarks, RIGHT_IRIS_CENTER, RIGHT_EYE_CONTOUR, w, h)
-    lfx, _ = _normalized_iris_position(landmarks, LEFT_IRIS_CENTER, LEFT_EYE_CONTOUR, w, h)
+    eyes. 0 = iris at one corner, 1 = at the other. `centres`, if given,
+    are the (right, left) eye centres to use instead of MediaPipe's iris
+    centres, in pixels of a w x h picture (see USE_PUPIL)."""
+    right, left = centres if centres is not None else (None, None)
+    rfx, _ = _normalized_iris_position(landmarks, RIGHT_IRIS_CENTER, RIGHT_EYE_CONTOUR, w, h, right)
+    lfx, _ = _normalized_iris_position(landmarks, LEFT_IRIS_CENTER, LEFT_EYE_CONTOUR, w, h, left)
     return (rfx + lfx) / 2
 
 
@@ -328,21 +379,68 @@ def _face_size(landmarks, w, h):
     return float(np.hypot((a.x - b.x) * w, (a.y - b.y) * h))
 
 
-def _compute_iris_height(landmarks, w, h):
+def _iris_diameter(landmarks, w, h):
+    """The irises' diameter in pixels of a w x h picture, averaged over
+    both eyes (for the distance estimate, see get_face_distance_cm)."""
+    total = 0.0
+    for centre, edge in ((RIGHT_IRIS_CENTER, RIGHT_IRIS_EDGE), (LEFT_IRIS_CENTER, LEFT_IRIS_EDGE)):
+        c = landmarks[centre]
+        total += 2 * np.mean([np.hypot((landmarks[i].x - c.x) * w, (landmarks[i].y - c.y) * h)
+                              for i in edge])
+    return total / 2
+
+
+def _eye_boxes(landmarks, w, h):
+    """Boxes (x0, y0, x1, y1) around the two eyes in a w x h picture: each
+    eye's outline with 5 pixels to spare (see _eye_sharpness)."""
+    boxes = []
+    for contour in (RIGHT_EYE_CONTOUR, LEFT_EYE_CONTOUR):
+        xs = [landmarks[i].x * w for i in contour]
+        ys = [landmarks[i].y * h for i in contour]
+        boxes.append((max(0, int(min(xs)) - 5), max(0, int(min(ys)) - 5),
+                      min(w, int(max(xs)) + 6), min(h, int(max(ys)) + 6)))
+    return boxes
+
+
+def _eye_sharpness(frame, boxes):
+    """How sharp the eyes are in a picture (see FOCUS_ON_EYES): the
+    average squared brightness difference between neighbouring pixels in
+    the boxes around the eyes, divided by the squared average brightness
+    so that it doesn't change with the exposure. Blur smooths out those
+    differences (the edges of the pupil, iris, eyelids and lashes). 0 if
+    there is no picture."""
+    if frame is None:
+        return 0.0
+    total = 0.0
+    for x0, y0, x1, y1 in boxes:
+        box = frame[y0:y1, x0:x1]
+        if box.shape[0] < 2 or box.shape[1] < 2:
+            continue
+        gray = box.mean(axis=2) if box.ndim == 3 else box.astype(float)
+        across = np.diff(gray, axis=1)[:-1, :]
+        down = np.diff(gray, axis=0)[:, :-1]
+        total += 1000 * (across ** 2 + down ** 2).mean() / max(gray.mean(), 1.0) ** 2
+    return total
+
+
+def _compute_iris_height(landmarks, w, h, centres=None):
     """iy: how far the iris centre sits below the line between the two
     eye corners, divided by the eye's width, averaged over both eyes
     (bigger = looking further down). The corners stay put when the eye
     or the eyelids move, so this follows the eye itself. (The old method
     measured the iris against the eyelids instead, and failed because
-    the eyelids move up and down together with the eye.)"""
+    the eyelids move up and down together with the eye.) `centres`: as
+    for _compute_horizontal_feature."""
     total = 0.0
-    for iris_idx, (c1, c2) in ((RIGHT_IRIS_CENTER, RIGHT_EYE_CORNERS),
-                               (LEFT_IRIS_CENTER, LEFT_EYE_CORNERS)):
-        a, b, iris = landmarks[c1], landmarks[c2], landmarks[iris_idx]
+    for iris_idx, (c1, c2), centre in zip((RIGHT_IRIS_CENTER, LEFT_IRIS_CENTER),
+                                          (RIGHT_EYE_CORNERS, LEFT_EYE_CORNERS),
+                                          centres if centres is not None else (None, None)):
+        a, b = landmarks[c1], landmarks[c2]
+        iris_y = landmarks[iris_idx].y * h if centre is None else centre[1]
         eye_width = abs(b.x - a.x) * w
         corner_y = (a.y + b.y) / 2 * h          # height of the line between the corners
         if eye_width > 0:
-            total += (iris.y * h - corner_y) / eye_width
+            total += (iris_y - corner_y) / eye_width
     return total / 2
 
 
@@ -486,8 +584,9 @@ def _neighbourhood(image, size, combine):
     return np.max(shifted, axis=0)
 
 
-def _remove_glints(crop):
-    """Paints over the glints, working inwards from their edges.
+def _remove_glints(crop, limit):
+    """Paints over the glints (pixels brighter than `limit`), working
+    inwards from their edges.
 
     A glint often sits ON the pupil. Left alone, it would punch a bright
     hole in the pupil and pull the pupil centre away. Each round, every
@@ -496,7 +595,7 @@ def _remove_glints(crop):
     the iris becomes iris-coloured.
     """
     # Glint pixels, plus 1 pixel of glow around them.
-    glint = _neighbourhood(crop >= GLINT_MIN_BRIGHTNESS, 1, "max") > 0
+    glint = _neighbourhood(crop > limit, 1, "max") > 0
     result = crop.astype(float)
     for _ in range(10):  # 10 rounds fills glints up to 20 pixels across
         if not glint.any():
@@ -510,47 +609,60 @@ def _remove_glints(crop):
 
 
 def find_pupil(gray, cx, cy, iris_radius):
-    """Finds the pupil centre near the iris centre (cx, cy) in a
-    grayscale image.
+    """Finds the pupil centre near MediaPipe's iris centre (cx, cy) in a
+    grayscale image (see PUPIL_MIDDLE_SCALE and the settings after it).
 
-    1. Paint over the glints, blur the area slightly (to remove noise)
-       and find its darkest point in the middle of the iris (within
-       PUPIL_SEED_SCALE of the iris radius): that point is inside the
-       pupil.
-    2. Keep the pixels near that point, inside PUPIL_SEARCH_SCALE of the
-       iris radius, that are clearly darker than the iris (see
-       PUPIL_THRESHOLD); together they are the pupil.
-    3. Return their centre, in the coordinates of `gray`, or None.
+    1. The iris's brightness: the middle (median) brightness of the ring
+       PUPIL_RING around the iris centre.
+    2. Glints (pixels much brighter than the iris) are painted over, and
+       the area is blurred slightly to remove noise.
+    3. The pupil's darkness: the darkest pixels (5%) in the middle of
+       the iris, within PUPIL_MIDDLE_SCALE of the iris radius.
+    4. Each pixel within PUPIL_MAX_SIZE of the iris radius gets a weight:
+       1 if it is clearly as dark as the pupil, 0 if it is clearly as
+       bright as the iris, and in between near the halfway level, i.e.
+       on the pupil's edge.
+    5. The pupil centre is the weighted average position of those pixels.
 
-    Starting from the darkest point in the middle of the iris (instead of
-    using every dark pixel in the iris) means eyelashes or eyelid shadows
-    at the iris edge are not mixed in with the pupil.
+    The half-counted edge pixels are what place the centre to a fraction
+    of a pixel. (The old version took the pixels near the darkest point,
+    which is often at the pupil's top, under the eyelashes' shadow or
+    next to a glint, and so put the centre too high.)
+
+    Returns (x, y) in the coordinates of `gray`, or None if no pupil is
+    seen (eye at the picture's edge, or no dark pupil: see
+    PUPIL_MIN_CONTRAST).
     """
-    radius = iris_radius * PUPIL_SEARCH_SCALE
-    crop, x0, y0 = _crop_square(gray, cx, cy, radius)
-    if crop.size == 0:
-        return None
-    smooth = _neighbourhood(_remove_glints(crop), 2, "mean")
+    radius = iris_radius
+    crop, x0, y0 = _crop_square(gray, cx, cy, radius + 2)
+    if crop.shape[0] < 2 * radius or crop.shape[1] < 2 * radius:
+        return None  # part of the eye is outside the picture
     rows, cols = np.ogrid[:crop.shape[0], :crop.shape[1]]
     distance_sq = (cols + x0 - cx) ** 2 + (rows + y0 - cy) ** 2
-    inside = distance_sq <= radius ** 2
-    middle = distance_sq <= (iris_radius * PUPIL_SEED_SCALE) ** 2
-    if not middle.any():
+    ring = ((distance_sq >= (PUPIL_RING[0] * radius) ** 2)
+            & (distance_sq <= (PUPIL_RING[1] * radius) ** 2))
+    middle = distance_sq <= (PUPIL_MIDDLE_SCALE * radius) ** 2
+    if not ring.any() or not middle.any():
         return None
 
-    # Step 1: darkest point in the middle of the iris (other pixels count as white).
-    in_circle = np.where(middle, smooth, 255)
-    seed_y, seed_x = np.unravel_index(np.argmin(in_circle), in_circle.shape)
-    darkest = in_circle[seed_y, seed_x]
-    typical = np.median(smooth[inside])  # typical brightness of the iris
-
-    # Step 2: pupil = pixels near the seed that are darker than the limit.
-    limit = darkest + PUPIL_THRESHOLD * (typical - darkest)
-    near_seed = (cols - seed_x) ** 2 + (rows - seed_y) ** 2 <= (radius * PUPIL_MAX_SIZE) ** 2
-    ys, xs = np.nonzero(inside & near_seed & (smooth <= limit))
-    if len(xs) == 0:
+    # Steps 1-3.
+    glint_limit = np.median(crop[ring]) + PUPIL_GLINT_CONTRAST
+    smooth = _neighbourhood(_remove_glints(crop, glint_limit), 1, "mean")
+    iris = np.median(smooth[ring])
+    pupil = np.percentile(smooth[middle], 5)
+    if iris - pupil < PUPIL_MIN_CONTRAST:
         return None
-    return (x0 + xs.mean(), y0 + ys.mean())
+
+    # Step 4: 1 below a quarter of the way from the pupil's darkness to
+    # the iris's brightness, 0 above three quarters, in between around
+    # halfway.
+    weight = np.clip(2 * (iris - smooth) / (iris - pupil) - 0.5, 0, 1)
+    weight[distance_sq > (PUPIL_MAX_SIZE * radius) ** 2] = 0
+    total = weight.sum()
+    if total < 5:
+        return None  # only a few dark pixels: not a pupil
+    # Step 5.
+    return (x0 + (weight * cols).sum() / total, y0 + (weight * rows).sum() / total)
 
 
 def _eye_openness(landmarks, w, h):
@@ -615,6 +727,9 @@ class _Eye:
     Dividing by the eye's width means they don't change when the user
     sits nearer or further away. "glint" is the point halfway between
     the two glints (see _glint_middle).
+
+    It also gives the eye's centre for the iris measurements fx and iy
+    (see centre() and USE_PUPIL).
     """
 
     def __init__(self, iris_center, iris_edge, corners):
@@ -628,20 +743,47 @@ class _Eye:
         self.middle = None            # where the middle of the pair was last time
         self.frames_without_pair = 0  # pictures in a row in which the pair wasn't found
         self.frames_rejected = 0      # pictures in a row in which the glints were thrown away
+        # From the latest picture (full-picture pixels, None if not found):
+        self.iris_point = None   # MediaPipe's iris centre
+        self.pupil_point = None  # the pupil centre found by find_pupil
+        self.eye_width = None
+        # Usual position of the pupil centre relative to MediaPipe's iris
+        # centre (divided by the eye width), for pictures in which the
+        # pupil isn't found (see centre()).
+        self.pupil_offset = None
 
     def forget(self):
-        """Forgets everything remembered about the glints. Used when the
-        face is lost: it may come back in another place or distance."""
+        """Forgets everything remembered about the glints and the pupil.
+        Used when the face is lost: it may come back in another place or
+        distance."""
         self.half_gap = None
         self.middle = None
         self.frames_without_pair = 0
         self.frames_rejected = 0
+        self.pupil_offset = None
+
+    def centre(self):
+        """The eye's centre in the latest picture, for fx and iy (see
+        USE_PUPIL), in full-picture pixels: the pupil centre if it was
+        found, otherwise MediaPipe's iris centre moved by the usual
+        distance between the two (so the measurement doesn't jump), or
+        None if the eye couldn't be measured at all."""
+        if self.pupil_point is not None:
+            return self.pupil_point
+        if self.iris_point is None:
+            return None
+        if self.pupil_offset is None:
+            return self.iris_point
+        dx, dy = self.pupil_offset
+        return (self.iris_point[0] + dx * self.eye_width, self.iris_point[1] + dy * self.eye_width)
 
     def measure(self, frame, landmarks):
         """Measures this eye in the full-size picture and updates vy and
         hx. Returns the glints and pupil found, as ("glint"/"pupil", x, y)
         points (full-picture pixels) to draw on the preview."""
         h, w = frame.shape[:2]
+        self.iris_point = None
+        self.pupil_point = None
 
         def pixel(i):
             """Landmark i in pixels (MediaPipe gives 0-1 fractions)."""
@@ -655,6 +797,8 @@ class _Eye:
         if iris_radius < 2 or eye_width < 10:
             self.skip()  # eye too small in the picture to measure
             return []
+        self.iris_point = (cx, cy)
+        self.eye_width = eye_width
 
         # Grayscale (average of the colour channels) of only the small
         # area around this eye -- much faster than converting the whole
@@ -662,8 +806,8 @@ class _Eye:
         # pupil, which can be near the iris edge. Positions found in it
         # are relative to its corner (x0, y0); adding x0, y0 gives
         # positions in the full picture.
-        search_radius = iris_radius * (PUPIL_SEARCH_SCALE + GLINT_SEARCH_SCALE)
-        box, x0, y0 = _crop_square(frame, cx, cy, search_radius + 2)
+        search_radius = iris_radius * (PUPIL_MAX_SIZE + GLINT_SEARCH_SCALE) + 3
+        box, x0, y0 = _crop_square(frame, cx, cy, search_radius)
         gray = box.mean(axis=2) if box.ndim == 3 else box
         pupil = find_pupil(gray, cx - x0, cy - y0, iris_radius)
         if pupil is None:
@@ -672,6 +816,13 @@ class _Eye:
         glint_area = GLINT_MAX_AREA * np.pi * iris_radius ** 2
         glints = find_glints(gray, pupil[0], pupil[1], iris_radius * GLINT_SEARCH_SCALE, glint_area)
         pupil = (pupil[0] + x0, pupil[1] + y0)
+        self.pupil_point = pupil
+        offset = ((pupil[0] - cx) / eye_width, (pupil[1] - cy) / eye_width)
+        if self.pupil_offset is None:
+            self.pupil_offset = offset
+        else:   # averaged over recent pictures, so one noisy picture doesn't matter
+            self.pupil_offset = tuple(SMOOTHING_ALPHA * new + (1 - SMOOTHING_ALPHA) * old
+                                      for new, old in zip(offset, self.pupil_offset))
         glints = [(gx + x0, gy + y0) for gx, gy in glints]
         points = [("glint", gx, gy) for gx, gy in glints] + [("pupil", pupil[0], pupil[1])]
 
@@ -916,6 +1067,8 @@ class _OpenCVCamera:
 
     name = "OpenCV webcam"
     mediapipe_step = 1  # webcam pictures are already small
+    infrared = False    # a normal webcam: the pupil isn't clear (see USE_PUPIL)
+    focal_length_px = None  # unknown, so no distance estimate
 
     def __init__(self):
         if cv2 is None:
@@ -945,6 +1098,7 @@ class _PiCamera:
 
     name = "Raspberry Pi camera (picamera2)"
     mediapipe_step = PI_MEDIAPIPE_STEP
+    infrared = True   # NoIR camera with IR LEDs: the pupil shows clearly dark
 
     def __init__(self):
         if Picamera2 is None:
@@ -960,31 +1114,44 @@ class _PiCamera:
         )
         self._picam.configure(config)
         self._picam.start()
-        # Fixed focus at the working distance (see PI_FOCUS_DISTANCE_M).
-        # Exposure is left on automatic, its default.
+        # Fixed focus (see PI_LENS_POSITION and FOCUS_ON_EYES). Exposure
+        # is left on automatic, its default.
         self._picam.set_controls({
             "AfMode": libcamera_controls.AfModeEnum.Manual,
-            "LensPosition": 1.0 / PI_FOCUS_DISTANCE_M,
+            "LensPosition": PI_LENS_POSITION,
         })
         time.sleep(2)  # let exposure and focus settle before the first frames
+        self.focal_length_px = self._focal_length_px()
 
-    def focus(self):
-        """One autofocus scan (see AUTOFOCUS). Afterwards the lens stays
-        where the scan left it. Returns the distance it focused at, in
-        centimetres, or None if it couldn't tell. Takes about a second,
-        during which no pictures are processed."""
+    def _focal_length_px(self):
+        """The lens's focal length in pixels of our pictures, for the
+        distance estimate (see get_face_distance_cm), or None. Each
+        picture pixel covers (sensor area used / picture width) sensor
+        pixels."""
         try:
-            self._picam.set_controls({"AfMode": libcamera_controls.AfModeEnum.Auto})
-            if not self._picam.autofocus_cycle():   # waits until the scan has finished
-                print("[GazeEngine] Autofocus could not find a sharp picture; the lens stays where it was")
-            lens = self._picam.capture_metadata().get("LensPosition")  # in dioptres = 1 / metres
+            focal_mm = PI_LENS_FOCAL_MM
+            if "wide" in str(self._picam.camera_properties.get("Model", "")).lower():
+                focal_mm = 2.75   # Camera Module 3 Wide
+            crop = self._picam.capture_metadata().get("ScalerCrop")
+            return focal_mm / (PI_SENSOR_PIXEL_MM * crop[2] / CAPTURE_WIDTH)
         except Exception as e:
-            print(f"[GazeEngine] Autofocus failed: {e}")
+            print(f"[GazeEngine] Could not work out the focal length: {e}")
             return None
-        if not lens:
-            return None
-        print(f"[GazeEngine] Autofocus: sharp at {100.0 / lens:.0f} cm")
-        return 100.0 / lens
+
+    def set_lens(self, dioptres):
+        """Moves the lens to `dioptres` (see FOCUS_ON_EYES) and returns a
+        picture taken after it got there (see FOCUS_MAX_WAIT_PICTURES)."""
+        self._picam.set_controls({"AfMode": libcamera_controls.AfModeEnum.Manual,
+                                  "LensPosition": float(dioptres)})
+        for waited in range(1, FOCUS_MAX_WAIT_PICTURES + 1):
+            # Each picture comes with the lens position it was taken at.
+            lens = self._picam.capture_metadata().get("LensPosition")
+            if lens is None and waited >= FOCUS_SETTLE_PICTURES:
+                break   # the camera doesn't report it: a fixed number of pictures
+            if lens is not None and abs(lens - dioptres) < 0.05:
+                break   # the lens has been told to go there
+        self._picam.capture_array()   # one more picture while the lens settles
+        return self.read()
 
     def describe(self):
         """The camera's mode and the part of the sensor in use, as text,
@@ -1050,8 +1217,14 @@ class GazeEngine:
         self._latest_eyes = None  # (full frame, glint/pupil points, iris centres, landmarks,
                                   #  picture number) for close-ups and eye pictures
         self._fps = None          # pictures processed per second, measured
-        self._focus_requested = AUTOFOCUS  # True: make an autofocus scan (see AUTOFOCUS)
-        self._focus_cm = None     # the distance the autofocus focused at, in cm
+        self._focus_requested = FOCUS_ON_EYES  # True: focus the lens on the eyes (see FOCUS_ON_EYES)
+        self._focusing = False    # True while that is being done
+        self._lens = None         # the lens position it chose (dioptres), None until then
+        self._eye_boxes = None    # boxes around the eyes in the latest picture with a face
+        self._use_pupil = False   # see USE_PUPIL; set once the camera is known
+        self._focal_px = None     # the camera's focal length in pixels, for the distance
+        self._iris_size = _Smoother(IRIS_HOLD_TIME)  # iris diameter in pixels, smoothed
+        self._latest_distance = None  # face distance in cm (see get_face_distance_cm)
         self.camera_mode = ""     # the camera's mode (see _PiCamera.describe)
         self._running = False
         self._thread = None
@@ -1129,6 +1302,10 @@ class GazeEngine:
         if describe is not None:
             self.camera_mode = describe()
             print(f"[GazeEngine] Camera: {self.camera_mode}")
+        self._use_pupil = USE_PUPIL and getattr(camera, "infrared", False)
+        self._focal_px = getattr(camera, "focal_length_px", None)
+        print("[GazeEngine] Eye position from " + ("the pupil found in the picture (USE_PUPIL)"
+                                                   if self._use_pupil else "MediaPipe's iris centre"))
         start_time = time.time()
         # Frame rate, and where the time goes, measured over 5 seconds at
         # a time and printed (seconds spent on each step, all pictures).
@@ -1137,16 +1314,17 @@ class GazeEngine:
         picture_number = 0
         while self._running:
             if self._focus_requested:
-                # An autofocus scan was asked for (see request_focus). It is
-                # done here, between two pictures, because the camera may
-                # only be used from this thread.
-                self._focus_requested = False
-                focus = getattr(camera, "focus", None)   # the laptop webcam has none
-                if focus is not None:
-                    distance = focus()
-                    if distance is not None:
-                        self._focus_cm = distance
-                fps_count, fps_start = 0, time.time()   # don't count the scan's pause in the fps
+                # Focusing on the eyes was asked for (see request_focus). It
+                # is done here, between two pictures, because the camera may
+                # only be used from this thread, and only once the eyes have
+                # been seen, because it measures how sharp they are.
+                if getattr(camera, "set_lens", None) is None:
+                    self._focus_requested = False   # the laptop webcam can't focus
+                elif self._eye_boxes is not None:
+                    self._focus_requested = False
+                    self._focus_on_eyes(camera)
+                    self._reset_measurements()   # start afresh with the sharp pictures
+                    fps_count, fps_start = 0, time.time()   # don't count the pause in the fps
             step_start = time.time()
             frame = camera.read()  # full-size RGB picture
             if frame is None:
@@ -1173,17 +1351,16 @@ class GazeEngine:
 
             debug_frame = small.copy()
             eyes = None
+            fh, fw = frame.shape[:2]
             if not result.face_landmarks:
                 feature = None
                 # Reset so re-acquiring doesn't drag from a stale position.
-                for smoother in [self._fx, self._iy, self._face_size] + self._head + \
-                        [eye.vy for eye in self._eyes] + [eye.hx for eye in self._eyes]:
-                    smoother.reset()
-                for eye in self._eyes:
-                    eye.forget()
+                self._reset_measurements()
             else:
                 landmarks = result.face_landmarks[0]
+                self._eye_boxes = _eye_boxes(landmarks, fw, fh)
                 self._face_size.update(_face_size(landmarks, sw, sh))
+                self._iris_size.update(_iris_diameter(landmarks, fw, fh))
                 for smoother, value in zip(self._head, _head_pose(landmarks, sw, sh)):
                     smoother.update(value)
                 points = []
@@ -1194,13 +1371,19 @@ class GazeEngine:
                     for eye in self._eyes:
                         eye.skip()
                 else:
-                    self._fx.update(_compute_horizontal_feature(landmarks, sw, sh))
-                    self._iy.update(_compute_iris_height(landmarks, sw, sh))
                     step_start = time.time()
                     for eye in self._eyes:
                         points += eye.measure(frame, landmarks)
                     spent["eyes"] += time.time() - step_start
-                fh, fw = frame.shape[:2]
+                    # The eyes' centres: the pupils found in the picture (see
+                    # USE_PUPIL), or MediaPipe's iris centres (centres = None).
+                    centres = None
+                    if self._use_pupil:
+                        centres = [eye.centre() for eye in self._eyes]
+                        if any(centre is None for centre in centres):
+                            centres = None   # an eye couldn't be measured at all
+                    self._fx.update(_compute_horizontal_feature(landmarks, fw, fh, centres))
+                    self._iy.update(_compute_iris_height(landmarks, fw, fh, centres))
                 iris_centres = [(landmarks[i].x * fw, landmarks[i].y * fh)
                                 for i in (RIGHT_IRIS_CENTER, LEFT_IRIS_CENTER)]
                 eyes = (frame, points, iris_centres, landmarks, picture_number)
@@ -1229,10 +1412,58 @@ class GazeEngine:
                 head = [smoother.value for smoother in self._head]
                 self._latest_head = None if None in head else tuple(head)
                 self._latest_face_size = self._face_size.value
+                iris = self._iris_size.value
+                self._latest_distance = (self._focal_px * IRIS_DIAMETER_MM / iris / 10
+                                         if self._focal_px and iris else None)
                 self._latest_debug_frame = debug_frame
                 self._latest_eyes = eyes
+            self._focusing = False   # (see _focus_on_eyes)
 
         camera.close()
+
+    def _reset_measurements(self):
+        """Forgets the smoothed measurements and what the eyes remember,
+        so that the next pictures start afresh."""
+        for smoother in [self._fx, self._iy, self._face_size, self._iris_size] + self._head + \
+                [eye.vy for eye in self._eyes] + [eye.hx for eye in self._eyes]:
+            smoother.reset()
+        for eye in self._eyes:
+            eye.forget()
+
+    def _focus_on_eyes(self, camera):
+        """Moves the lens to where the eyes are sharpest (see FOCUS_ON_EYES)
+        and leaves it there. The eyes are assumed to stay where they were
+        in the latest picture (the head rests on a support), so no
+        MediaPipe is needed while the lens moves. Takes a few seconds,
+        during which there are no gaze readings."""
+        self._focusing = True
+        with self._lock:
+            self._latest_feature = None   # the pictures aren't measured meanwhile
+        started = time.time()
+        sharpness = {}   # lens position -> how sharp the eyes were there
+
+        def try_lens(lens):
+            lens = round(float(lens), 3)
+            if lens >= 0 and lens not in sharpness:
+                sharpness[lens] = _eye_sharpness(camera.set_lens(lens), self._eye_boxes)
+
+        try:
+            for lens in FOCUS_LENS_POSITIONS:
+                try_lens(lens)
+            best = max(sharpness, key=sharpness.get)
+            for steps in (-2, -1, 1, 2):   # finer steps either side of the sharpest
+                try_lens(best + steps * FOCUS_FINE_STEP)
+            best = max(sharpness, key=sharpness.get)
+            camera.set_lens(best)
+            self._lens = best
+            tried = ", ".join(f"{lens:g}: {value:.1f}" for lens, value in sorted(sharpness.items()))
+            print(f"[GazeEngine] Focused on the eyes: lens {best:g} in {time.time() - started:.1f} s "
+                  f"(sharpness at each lens position: {tried})")
+        except Exception as e:
+            print(f"[GazeEngine] Focusing on the eyes failed: {e}")
+        # _focusing goes back to False once the next picture has been
+        # measured (end of the _run_loop round), so the app never sees a
+        # moment with neither focusing nor a gaze reading.
 
     # ---- public API used by the Kivy app ------------------------------
     def is_camera_ok(self):
@@ -1263,15 +1494,27 @@ class GazeEngine:
         return self._fps
 
     def request_focus(self):
-        """Asks for one autofocus scan (see AUTOFOCUS). It happens in the
-        background within a moment; the pointer pauses for about a second."""
-        if AUTOFOCUS:
+        """Asks for the lens to be focused on the eyes (see FOCUS_ON_EYES).
+        It happens in the background as soon as the eyes are seen, and
+        takes a few seconds without gaze readings (see is_focusing)."""
+        if FOCUS_ON_EYES:
             self._focus_requested = True
 
-    def get_focus_distance_cm(self):
-        """The distance the last autofocus scan focused at (camera to the
-        face), in centimetres, or None if unknown."""
-        return self._focus_cm
+    def is_focusing(self):
+        """True while focusing on the eyes is waiting or going on."""
+        return self._focus_requested or self._focusing
+
+    def get_lens_position(self):
+        """The lens position chosen by the last focusing (dioptres), or
+        None if it hasn't focused yet (see FOCUS_ON_EYES)."""
+        return self._lens
+
+    def get_face_distance_cm(self):
+        """How far the eyes are from the camera, in centimetres, worked out
+        from the size of the irises in the picture (see IRIS_DIAMETER_MM),
+        or None if unknown (no face, or the laptop webcam)."""
+        with self._lock:
+            return self._latest_distance
 
     def get_eye_picture(self):
         """A picture of both eyes at the camera's full detail, for the
