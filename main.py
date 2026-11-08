@@ -1307,6 +1307,19 @@ CALIBRATION_SETTLE_TIME = 1.0   # first part of those seconds is ignored: the
                                 # eyes are still moving onto the new dot. Users
                                 # with motor impairments may need this time.
 COUNTDOWN_SECONDS = 3           # 3, 2, 1 after Start is pressed
+# The camera focuses on the eyes during the countdown (see FOCUS_ON_EYES
+# in gaze_engine.py). If it hasn't finished when the countdown ends, the
+# dots wait for it, up to FOCUS_WAIT_SECONDS.
+FOCUS_WAIT_SECONDS = 10
+# Where the user should sit: about BEST_DISTANCE_CM from the camera. The
+# READY stage shows the distance (worked out from the iris size, see
+# get_face_distance_cm in gaze_engine.py) and asks the user to move
+# closer or back if it is more than DISTANCE_TOLERANCE_CM off. Closer is
+# more accurate: the eyes are bigger in the picture, and the same small
+# error in the eye's angle moves the pointer less on the screen. On
+# 9 November the face was about 55 cm away.
+BEST_DISTANCE_CM = 40
+DISTANCE_TOLERANCE_CM = 7
 RESULT_SECONDS = 15             # how long the result stays on screen (to photograph it)
 
 # ACCURACY TEST (for testing, and for the results chapter). After
@@ -1447,7 +1460,7 @@ class CalibrationScreen(Screen):
         self.dot.pos = (-100, -100)
         self.eye_pictures = []
         # Sharpen the camera picture for where the user sits now (see
-        # AUTOFOCUS in gaze_engine.py), so the preview is sharp too.
+        # FOCUS_ON_EYES in gaze_engine.py), so the preview is sharp too.
         self.gaze_engine.request_focus()
         self._place_label("top", 22, 0.2)
         self.instruction_label.text = (
@@ -1488,7 +1501,12 @@ class CalibrationScreen(Screen):
         self.preview_image.opacity = 1
 
         feature = self.gaze_engine.get_latest_feature()
-        if feature is None:
+        distance = self.gaze_engine.get_face_distance_cm()
+        if self.gaze_engine.is_focusing() and distance is not None:
+            # The face has been seen; the camera is focusing on the eyes.
+            self.face_label.text = "Face detected -- focusing the camera on your eyes..."
+            self.face_label.color = WHITE
+        elif feature is None:
             self.face_label.text = "Face not detected -- move into the camera view"
             self.face_label.color = RED_TEXT
         else:
@@ -1498,8 +1516,16 @@ class CalibrationScreen(Screen):
             # iris is used instead (see _fit_axis in gaze_engine.py). So a
             # missing glint is only mentioned, not shown as a problem.
             glints = "IR glints seen" if feature[1] is not None else "no IR glints, the iris will be used"
-            self.face_label.text = f"Face detected ({glints}) -- press Start when you are ready"
-            self.face_label.color = GREEN_TEXT
+            advice, color = "press Start when you are ready", GREEN_TEXT
+            if distance is not None:
+                glints += f", {distance:.0f} cm from the camera"
+                # See BEST_DISTANCE_CM. Start still works; this is advice.
+                if distance > BEST_DISTANCE_CM + DISTANCE_TOLERANCE_CM:
+                    advice, color = f"move closer, to about {BEST_DISTANCE_CM} cm", WHITE
+                elif distance < BEST_DISTANCE_CM - DISTANCE_TOLERANCE_CM:
+                    advice, color = f"move back, to about {BEST_DISTANCE_CM} cm", WHITE
+            self.face_label.text = f"Face detected ({glints}) -- {advice}"
+            self.face_label.color = color
 
         # The camera works, so the user may start now.
         if self.start_btn.parent is None:
@@ -1548,6 +1574,11 @@ class CalibrationScreen(Screen):
         self._countdown_left -= 1
         if self._countdown_left > 0:
             self._show_countdown()
+            return
+        # Wait for the camera to finish focusing on the eyes (see
+        # FOCUS_WAIT_SECONDS): meanwhile there are no gaze readings.
+        if self.gaze_engine.is_focusing() and self._countdown_left > -FOCUS_WAIT_SECONDS:
+            self.instruction_label.text = "Focusing the camera on your eyes...\nKeep your head still"
             return
         self._countdown_event.cancel()
         self._countdown_event = None
@@ -1640,7 +1671,8 @@ class CalibrationScreen(Screen):
                              + [rounded(pointer[0], 1), rounded(pointer[1], 1),
                                 rounded(self.gaze_engine.get_fps(), 1)]
                              + [rounded(v, 2) for v in (turn, tilt, head_x, head_y)]
-                             + [rounded(self.gaze_engine.get_focus_distance_cm(), 1)])
+                             + [rounded(self.gaze_engine.get_lens_position(), 3),
+                                rounded(self.gaze_engine.get_face_distance_cm(), 1)])
 
     def _finish_current_target(self, dt):
         if self._sample_event is not None:
@@ -1751,7 +1783,7 @@ class CalibrationScreen(Screen):
         self._place_label("center", 24, 0.8)
         fps = self.gaze_engine.get_fps()
         saved = self._save_log()
-        distance = self.gaze_engine.get_focus_distance_cm()
+        distance = self.gaze_engine.get_face_distance_cm()
         details = [f"camera {fps:.0f} pictures a second" if fps is not None else "",
                    f"face {distance:.0f} cm from the camera" if distance is not None else "",
                    f"saved to {saved}" if saved else ""]
@@ -1771,7 +1803,8 @@ class CalibrationScreen(Screen):
                 writer = csv.writer(f)
                 writer.writerow(["stage", "dot", "dot_x", "dot_y", "seconds",
                                  "fx", "vy", "iy", "hx", "pointer_x", "pointer_y", "camera_fps",
-                                 "head_turn_deg", "head_tilt_deg", "head_x", "head_y", "focus_cm"])
+                                 "head_turn_deg", "head_tilt_deg", "head_x", "head_y",
+                                 "lens", "distance_cm"])
                 writer.writerows(self.log_rows)
             self._save_eye_pictures(os.path.join(LOG_DIR, name[:-4] + "_eyes"))
             return f"logs/{name}"
@@ -1793,7 +1826,8 @@ class CalibrationScreen(Screen):
             os.makedirs(folder, exist_ok=True)
             with open(os.path.join(folder, "pictures.jsonl"), "w") as index:
                 index.write(json.dumps({"camera": self.gaze_engine.camera_mode,
-                                        "focus_cm": self.gaze_engine.get_focus_distance_cm(),
+                                        "lens": self.gaze_engine.get_lens_position(),
+                                        "distance_cm": self.gaze_engine.get_face_distance_cm(),
                                         "screen": [round(self.width), round(self.height)]}) + "\n")
                 for k, (stage, dot, dot_x, dot_y, seconds, picture) in enumerate(self.eye_pictures):
                     number, gray, (x0, y0), landmarks = picture
