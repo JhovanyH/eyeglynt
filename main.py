@@ -107,7 +107,7 @@ Window.size = (SCREEN_W, SCREEN_H)
 # (29 October), 1.5 s and then 2 s were too quick. With the pointer
 # still off by a few centimetres, keys were selected before the user
 # could settle on the right one.
-DWELL_TIME = 4.0  # seconds (fixed: the caregiver dashboard no longer changes it)
+DWELL_TIME = 4.0  # seconds (default; a caregiver dashboard session can pick 2-6 s)
 
 # Gaze is never perfectly steady: the pointer jitters by a few millimetres
 # even when the eyes are still, and a blink can throw it off for a moment.
@@ -554,6 +554,24 @@ def tell_dashboard(btn, interface, kind, element_id, text, category=None, naviga
         pointer = (x, Window.height - y)   # pixels from the TOP left of the screen
     dashboard.selection(interface, kind, element_id, text, category=category,
                         dwell_s=btn._active_dwell_time, pointer=pointer, navigation=navigation)
+
+
+DEVICE_DWELL_TIME = DWELL_TIME   # the setting at the top, used again when a dashboard session ends
+
+
+def set_dwell_time(seconds):
+    """Changes the dwell time of every button: the dwell time the caregiver
+    picked for the session on the dashboard (2-6 s), and DWELL_TIME again
+    when the session ends."""
+    global DWELL_TIME, REPEAT_TIME, CLEAR_CONFIRM_TIME
+    if seconds == DWELL_TIME:
+        return
+    DWELL_TIME = REPEAT_TIME = seconds           # for the buttons made from now on
+    CLEAR_CONFIRM_TIME = REPEAT_TIME + 2.0
+    for screen in App.get_running_app().root.screens:
+        for btn in _find_dwell_buttons(screen):  # and for the ones already there
+            btn.dwell_time = btn.repeat_time = seconds
+    print(f"[Dashboard] Dwell time is now {seconds:.1f} seconds")
 
 
 # ---------------------------------------------------------------------------
@@ -1937,6 +1955,11 @@ class EyeGlyntApp(App):
                 self.sm.get_screen("calibration").cancel()
                 dashboard.recalibration_cancelled()
                 self.sm.current = "keyboard"
+            elif command in ("start_session", "set_dwell_time") and details.get("dwell_time_ms"):
+                # The dwell time the caregiver picked for this session.
+                set_dwell_time(details["dwell_time_ms"] / 1000)
+            elif command == "end_session":
+                set_dwell_time(DEVICE_DWELL_TIME)
 
     def on_start(self):
         # Open maximized, filling the screen but keeping the title bar, so

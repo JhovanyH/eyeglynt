@@ -6,7 +6,7 @@ from flask import (Blueprint, Response, abort, current_app, flash, redirect,
 from flask_login import current_user, login_required
 
 from . import db, metrics
-from .constants import ALERT_LABELS, BENCHMARKS, CARE_SETTINGS, DWELL_TIME_MS
+from .constants import ALERT_LABELS, BENCHMARKS, CARE_SETTINGS, DEFAULT_DWELL_MS, DWELL_OPTIONS
 
 bp = Blueprint("sessions", __name__)
 
@@ -112,8 +112,13 @@ def start():
             care_setting = chosen["care_setting"] if chosen else None
             if chosen and not care_setting:
                 errors["care_setting"] = "This patient has no care setting yet. Ask the research team to set it."
-        # One mode for everyone, and the device's fixed 4 s dwell time.
-        mode, dwell = "normal", DWELL_TIME_MS
+        mode = "normal"   # one mode for everyone
+        try:
+            dwell = int(form.get("dwell_time_ms", DEFAULT_DWELL_MS))
+            if dwell not in [d for d, _ in DWELL_OPTIONS]:
+                raise ValueError
+        except ValueError:
+            errors["dwell_time_ms"] = "Select a dwell time."
 
         if not errors:
             try:
@@ -143,7 +148,8 @@ def start():
                      profile["profile_id"] if profile else None, form.get("notes") or None),
                 )
                 metrics.queue_command(session_id, "start_session", current_user.id,
-                                      {"session_id": session_id, "patient_id": patient_id})
+                                      {"session_id": session_id, "patient_id": patient_id,
+                                       "dwell_time_ms": dwell})
                 db.commit()
             except Exception as exc:  # most likely: another session started at the same moment
                 db.rollback()
@@ -157,6 +163,7 @@ def start():
     return render_template(
         "start.html", form=form, errors=errors, patients=patients,
         care_settings=CARE_SETTINGS, device=metrics.device_status(),
+        dwell_options=DWELL_OPTIONS, default_dwell_ms=DEFAULT_DWELL_MS,
     )
 
 

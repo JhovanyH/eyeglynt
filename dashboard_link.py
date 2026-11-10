@@ -129,6 +129,8 @@ class DashboardLink:
                               password=env.get("ENGINE_DB_PASSWORD", ""),
                               database=env.get("DB_NAME"))
         self.enabled = True
+        # If the app was restarted during a session, use that session's dwell time.
+        self._do(self._resume_session)
         threading.Thread(target=self._background, daemon=True).start()
         print("[Dashboard] Connected: the caregiver dashboard will show this device")
 
@@ -269,6 +271,11 @@ class DashboardLink:
             return False
         block = db.active_test_block(session["session_id"])
         return block is not None and block["block_type"] == "free_look"
+
+    def _resume_session(self, db):
+        session = db.active_session(force=True)
+        if session and session.get("dwell_time_ms"):
+            self._commands.put(("set_dwell_time", {"dwell_time_ms": session["dwell_time_ms"]}))
 
     def _background(self):
         """Runs for as long as the app is open: heartbeats, dashboard
