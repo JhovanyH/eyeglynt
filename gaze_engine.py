@@ -1258,6 +1258,11 @@ class GazeEngine:
         self._centre_x = None
         self._centre_y = None
 
+        # Re-centring (see set_pointer_shift): how far the pointer is moved
+        # after the fits, (x, y) in screen pixels. Back to (0, 0) at every
+        # new calibration.
+        self._pointer_shift = (0.0, 0.0)
+
     # ---- lifecycle ---------------------------------------------------
     def start(self):
         if self._running:
@@ -1614,6 +1619,21 @@ class GazeEngine:
         self._x_heads = []
         self._y_heads = []
         self._calib_head = None
+        self._pointer_shift = (0.0, 0.0)
+
+    def get_pointer_shift(self):
+        """How far the pointer is being moved after the fits, (x, y) in
+        screen pixels (see set_pointer_shift)."""
+        return self._pointer_shift
+
+    def set_pointer_shift(self, x, y):
+        """Moves the gaze pointer by (x, y) screen pixels (y upwards, as in
+        Kivy), on top of the calibration's fits, from now on. Used by the
+        app's automatic re-centring (DRIFT_CORRECTION in main.py): after a
+        calibration, the pointer slowly slides off as the head settles,
+        mostly by the same amount all over the screen. A new calibration
+        starts again from (0, 0)."""
+        self._pointer_shift = (float(x), float(y))
 
     def fit_calibration(self):
         """Fits left/right and up/down (see _fit_axis): each uses the
@@ -1625,6 +1645,7 @@ class GazeEngine:
         calibration)."""
         if len(self._x_points) < 2:
             raise ValueError(f"Need at least 2 calibration points, got {len(self._x_points)}")
+        self._pointer_shift = (0.0, 0.0)   # new fits: start again without re-centring
 
         # References for the distance and head-movement corrections.
         self._centre_x = float(np.mean([p[2] for p in self._x_points]))
@@ -1718,8 +1739,9 @@ class GazeEngine:
             return None
         # Distance correction: stretch or shrink around the middle.
         x = self._centre_x + (x - self._centre_x) * self._distance_scale()
-        # Head-movement correction (see HEAD_CORRECTION).
-        return x + self._head_correction()[0]
+        # Head-movement correction (see HEAD_CORRECTION), and re-centring
+        # (see set_pointer_shift).
+        return x + self._head_correction()[0] + self._pointer_shift[0]
 
     def get_screen_y(self):
         """Returns the predicted screen Y (Kivy: 0 = bottom) from the
@@ -1737,5 +1759,6 @@ class GazeEngine:
             return None
         # Distance correction: stretch or shrink around the middle.
         y = self._centre_y + (y - self._centre_y) * self._distance_scale()
-        # Head-movement correction (see HEAD_CORRECTION).
-        return y + self._head_correction()[1]
+        # Head-movement correction (see HEAD_CORRECTION), and re-centring
+        # (see set_pointer_shift).
+        return y + self._head_correction()[1] + self._pointer_shift[1]
