@@ -1605,6 +1605,17 @@ FOCUS_WAIT_SECONDS = 10
 BEST_DISTANCE_CM = 40
 DISTANCE_TOLERANCE_CM = 7
 RESULT_SECONDS = 15             # how long the result stays on screen (to photograph it)
+# CALIBRATING AGAIN. A result that says "please calibrate again" (Poor,
+# up/down did not work, or calibration did not work) does not go on to
+# the home screen: after RETRY_SECONDS, calibration starts again from the
+# beginning (live preview and Start). After CALIBRATION_TRIES such results
+# in a row, the app goes on anyway, so the user is never left without a
+# way to talk, and the caregiver's dashboard gets a "Calibration required"
+# alert (during a session). The caregiver can also leave calibration at
+# any time with Stop calibration on the dashboard. CALIBRATION_TRIES = 1
+# goes on after any result, as before 13 November 2026.
+CALIBRATION_TRIES = 3
+RETRY_SECONDS = 6
 
 # ACCURACY TEST (for testing, and for the results chapter). After
 # calibration, the red dot visits ACCURACY_TEST_POINTS, places between
@@ -1719,6 +1730,8 @@ class CalibrationScreen(Screen):
         self._sample_event = None
         self._preview_event = None
         self._countdown_event = None
+        self._retry_event = None       # calibrating again after a poor result (see CALIBRATION_TRIES)
+        self._tries = 0                # calibrations so far that said "please calibrate again"
         self._leaving = False          # True once we've decided to leave
         self.eye_pictures = []         # see SAVE_EYE_PICTURES: (stage, dot, dot x, dot y, seconds, picture)
         self._last_picture_number = None
@@ -1770,12 +1783,19 @@ class CalibrationScreen(Screen):
 
     # ---- stage 1: READY ------------------------------------------------
     def on_pre_enter(self, *args):
-        self.target_index = 0
-        self.log_rows = []
-        self.test_results = []
         # Kept so "Stop calibration" on the dashboard can put it back (see cancel).
         self._previous_calibration = {name: getattr(self.gaze_engine, name)
                                       for name in CALIBRATION_STATE if hasattr(self.gaze_engine, name)}
+        self._tries = 0
+        self._get_ready()
+
+    def _get_ready(self):
+        """The READY stage: live preview and Start. Also used to calibrate
+        again after a poor result (see CALIBRATION_TRIES)."""
+        self._cancel_retry()
+        self.target_index = 0
+        self.log_rows = []
+        self.test_results = []
         self.gaze_engine.clear_calibration()
         self.stage = "ready"
         self._leaving = False
@@ -1786,7 +1806,8 @@ class CalibrationScreen(Screen):
         self.gaze_engine.request_focus()
         self._place_label("top", CALIBRATION_TEXT_SIZE, 0.19)
         self.instruction_label.text = (
-            "Get ready for calibration\n"
+            ("Get ready for calibration\n" if self._tries == 0 else
+             f"Let's calibrate again (try {self._tries + 1} of {CALIBRATION_TRIES})\n") +
             "Sit about 40 cm from the camera, with your whole face in the camera view.\n"
             "When calibration starts, keep your head still and follow the red dot with your eyes.\n"
             "Preview: green = iris, white = IR glints, yellow = pupil."
@@ -2191,10 +2212,41 @@ class CalibrationScreen(Screen):
         if slowdown:
             lines.append(f"[color={_hex(RED_TEXT)}]Warning: the Pi is slowed down: "
                          f"{escape_markup(slowdown)}[/color]")
+        # A poor result: calibrate again, up to CALIBRATION_TRIES times.
+        poor = "please calibrate again" in self.summary
+        if poor:
+            self._tries += 1
+        again = poor and self._tries < CALIBRATION_TRIES
+        if again:
+            lines.append(f"[b]Calibrating again in {RETRY_SECONDS} seconds "
+                         f"(try {self._tries + 1} of {CALIBRATION_TRIES})[/b]")
+        elif poor and CALIBRATION_TRIES > 1:
+            lines.append(f"[b][color={_hex(AMBER_TEXT)}]Poor {self._tries} times in a row, so EyeGlynt "
+                         f"goes on anyway. Recalibrate from the dashboard.[/color][/b]")
         if details:
             lines.append(f"[size={RESULT_DETAILS_SIZE}]({escape_markup(details)})[/size]")
         self.instruction_label.text = "\n".join(lines)
+        if again:
+            print(f"[Calibration] not good enough: calibrating again (try {self._tries + 1} "
+                  f"of {CALIBRATION_TRIES})")
+            self._retry_event = Clock.schedule_once(lambda dt: self._calibrate_again(), RETRY_SECONDS)
+            return
+        if poor and CALIBRATION_TRIES > 1:
+            print(f"[Calibration] poor {self._tries} times in a row: going on anyway, caregiver alerted")
+            dashboard.calibration_gave_up(self._tries)
         self._leave_after(RESULT_SECONDS)  # long enough to read (or photograph) the result
+
+    def _calibrate_again(self):
+        """RETRY_SECONDS after a poor result: back to the READY stage, unless
+        calibration was left meanwhile (Stop calibration on the dashboard)."""
+        self._retry_event = None
+        if self.manager is not None and self.manager.current == self.name and self.stage == "result":
+            self._get_ready()
+
+    def _cancel_retry(self):
+        if self._retry_event is not None:
+            self._retry_event.cancel()
+            self._retry_event = None
 
     def _save_log(self):
         """Saves every reading to logs/gaze_<date>_<time>.csv. Returns the
@@ -2258,6 +2310,7 @@ class CalibrationScreen(Screen):
         puts back the calibration from before (if there was one). The app
         then shows the keyboard."""
         self._leaving = True
+        self._cancel_retry()
         if self._sample_event is not None:
             self._sample_event.cancel()
             self._sample_event = None
@@ -2269,6 +2322,7 @@ class CalibrationScreen(Screen):
 
     def on_leave(self, *args):
         self._stop_preview()
+        self._cancel_retry()
         if self._countdown_event is not None:
             self._countdown_event.cancel()
             self._countdown_event = None

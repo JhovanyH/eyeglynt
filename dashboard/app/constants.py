@@ -53,5 +53,5 @@ CAREGIVER_ALERT_TEXT = {
     "recalibration_failed": "Recalibration didn't work. Check the patient's position and the room lighting.",
     "recalibration_cancelled": "Calibration was stopped. The device went back to the keyboard.",
     "session_auto_ended": "The EyeGlynt app was closed on the device, so the session ended.",
-    "calibration_required": "The device needs to be calibrated.",
+    "calibration_required": "Calibration was poor several times in a row. Check the patient's position (about 40 cm from the camera) and the room lighting, then press Recalibrate.",
 }
