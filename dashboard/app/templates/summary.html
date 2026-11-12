@@ -39,7 +39,7 @@
         <li class="{{ r.intent_status if r.intent_status in ('unintended', 'ignored') }}{{ ' spoken' if r.selection_type == 'speak' }}" style="grid-template-columns:auto auto 1fr">
           <span class="t">{{ r.selected_at|hms }}</span>
           <span class="pill {{ 'qf' if r.interface == 'quickfire' else 'kb' }}">{{ 'Quick-Fire' if r.interface == 'quickfire' else 'Keyboard' }}</span>
-          <span class="txt">{% if r.selection_type == 'speak' %}<span class="spoke pill ok">Spoken</span>{% endif %}{{ r.output_text }}
+          <span class="txt">{% if r.selection_type == 'navigation' %}<span class="tag pill muted" style="margin-right:6px">navigation</span>{% endif %}{% if r.selection_type == 'speak' %}<span class="spoke pill ok">Spoken</span>{% endif %}{{ r.output_text }}
             {% if show_test_marks and r.target_element_id is not none %}<span class="tag pill {{ 'ok' if r.is_correct else 'bad' }}">{{ '✓ target' if r.is_correct else '✗ missed' }}</span>{% endif %}
             {% if r.intent_status == 'unintended' %}<span class="tag pill bad">incorrect</span>{% endif %}
             {% if r.intent_status == 'ignored' %}<span class="tag pill muted">unintended</span>{% endif %}

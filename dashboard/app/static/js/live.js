@@ -84,6 +84,16 @@
     }
     li.appendChild(txt);
 
+    // Navigation (researchers only): opening a group, Back, tabs, ... Not
+    // counted in the metrics, so there is nothing to mark.
+    if (s.type === "navigation") {
+      li.classList.add("nav");
+      txt.appendChild(document.createTextNode(" "));
+      txt.appendChild(el("span", "tag pill muted", "navigation"));
+      li.appendChild(el("span"));
+      return li;
+    }
+
     const marks = el("span", "marks");
     const flag = el("button", "flag unintended-btn");
     flag.type = "button";

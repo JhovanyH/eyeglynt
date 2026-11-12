@@ -38,15 +38,21 @@ def active_session_id():
     return row["session_id"] if row else None
 
 
-def session_selections(session_id, after_id=0):
+def session_selections(session_id, after_id=0, navigation=None):
+    """The session's selections. Navigation selections (opening a letter
+    group, Back, tabs, ...) are for researchers only: navigation=None means
+    "if the logged-in account is a researcher"."""
+    if navigation is None:
+        navigation = current_user.is_researcher
     return db.query(
         """SELECT x.selection_id, x.selected_at, x.interface, x.selection_type, x.element_id,
                   x.output_text, x.category, x.target_element_id, x.is_correct, x.intent_status,
                   x.block_id, b.block_type
            FROM selections x LEFT JOIN test_blocks b ON b.block_id = x.block_id
            WHERE x.session_id=%s AND x.selection_id>%s
+             AND (%s OR x.selection_type <> 'navigation')
            ORDER BY x.selection_id""",
-        (session_id, after_id),
+        (session_id, after_id, bool(navigation)),
     )
 
 

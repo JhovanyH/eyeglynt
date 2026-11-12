@@ -314,3 +314,6 @@ select.input { appearance: none; padding-right: 36px;
   .log li:has(.marks) { grid-template-columns: auto auto 1fr; }
   .log li .marks { grid-column: 1 / -1; justify-content: flex-end; }
 }
+
+/* Navigation selections (researchers only): opening a group, Back, tabs */
+.log li.nav .txt { color: var(--muted); font-size: 14px; }
