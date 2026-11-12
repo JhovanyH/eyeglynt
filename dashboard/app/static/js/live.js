@@ -7,6 +7,11 @@
   const D = root.dataset;
   const CSRF = document.querySelector('meta[name="csrf-token"]').content;
   const POLL_MS = parseInt(D.poll, 10) || 2000;
+  // A check that gets no answer within this time is given up and tried
+  // again, so one request lost on a weak Wi-Fi can't freeze the Live screen.
+  const POLL_TIMEOUT_MS = 10000;
+  // After failed checks, wait longer before the next one, but never more than this.
+  const MAX_RETRY_MS = 10000;
   const $ = (id) => document.getElementById(id);
 
   const state = { afterSel: 0, afterAlert: 0, elapsed: parseInt(D.elapsed, 10) || 0,
@@ -207,11 +212,15 @@
     if (inFlight) return;
     inFlight = true;
     clearTimeout(timer);
+    const giveUp = new AbortController();
+    const giveUpTimer = setTimeout(() => giveUp.abort(), POLL_TIMEOUT_MS);
     try {
       const url = D.updatesUrl + "?after_sel=" + state.afterSel + "&after_alert=" + state.afterAlert;
-      const res = await fetch(url, { credentials: "same-origin", headers: { Accept: "application/json" } });
+      const res = await fetch(url, { credentials: "same-origin", headers: { Accept: "application/json" },
+                                     signal: giveUp.signal });
       if (res.status === 401 || res.redirected) { location.reload(); return; }
       const data = await res.json();
+      clearTimeout(giveUpTimer);
       state.failures = 0;
 
       if (data.status === "ended") { location.href = data.summary_url; return; }
@@ -246,13 +255,14 @@
       if (!stop.dataset.busy) stop.hidden = !calibrating;
       state.firstLoad = false;
     } catch (e) {
+      clearTimeout(giveUpTimer);
       state.failures += 1;
       const badge = $("live-badge");
       badge.classList.add("offline");
       badge.textContent = "Reconnecting…";
     }
     inFlight = false;
-    timer = setTimeout(poll, Math.min(POLL_MS * Math.pow(2, state.failures), 30000));
+    timer = setTimeout(poll, Math.min(POLL_MS * Math.pow(2, state.failures), MAX_RETRY_MS));
   }
 
   // ---------------------------------------------------------------- controls
