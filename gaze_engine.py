@@ -46,6 +46,7 @@ import subprocess
 import threading
 import time
 import urllib.request
+import warnings
 
 import numpy as np
 import mediapipe as mp
@@ -350,6 +351,11 @@ HEAD_SMOOTHING_TIME = 1.0   # seconds (was 0.1 per picture, about 1 s at 9 pictu
 # picamera2 writes a DEBUG line for every camera job; they flooded the
 # terminal (12 November) and hid the app's own lines.
 logging.getLogger("picamera2").setLevel(logging.INFO)
+# MediaPipe uses an old protobuf call for every picture, and protobuf
+# printed a "SymbolDatabase.GetPrototype() is deprecated" warning about
+# it every few seconds. It is harmless (nothing to fix on our side), so
+# it is hidden to keep the terminal readable.
+warnings.filterwarnings("ignore", message=r"SymbolDatabase\.GetPrototype\(\) is deprecated")
 
 
 def _pi_health():
