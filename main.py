@@ -1015,7 +1015,7 @@ class AppScreen(Screen):
         white border and is not selectable; the other one switches to its
         screen."""
         own = screen_name == self.TAB
-        return DwellButton(text=text, bold=True, font_size=20, icon=icon, icon_layout="top",
+        return DwellButton(text=text, bold=True, font_size=26, icon=icon, icon_layout="top",
                            bg_color=color, text_color=WHITE, radius=12,
                            border_color=WHITE if own else None, selectable=not own,
                            size_hint_x=TAB_WIDTH,
@@ -1070,7 +1070,7 @@ class KeyboardScreen(AppScreen):
         # The message sits in a ScrollView: when it grows taller than the box,
         # the view scrolls to the end so the newest text is always visible.
         self.text_scroll = ScrollView(do_scroll_x=False, bar_width=4)
-        self.text_label = Label(font_size=34, halign="left", valign="top", size_hint_y=None,
+        self.text_label = Label(font_size=44, halign="left", valign="top", size_hint_y=None,
                                 markup=True)  # markup: for the coloured cursor (see _refresh_text)
         # Wrap at the box width; let the height grow with the text.
         self.text_label.bind(width=lambda w, v: setattr(w, "text_size", (v, None)))
@@ -1079,7 +1079,7 @@ class KeyboardScreen(AppScreen):
         box.add_widget(self.text_scroll)
         row.add_widget(box)
 
-        action = dict(bg_color=PURPLE, text_color=WHITE, radius=12, bold=True, font_size=20,
+        action = dict(bg_color=PURPLE, text_color=WHITE, radius=12, bold=True, font_size=26,
                       icon_layout="top", size_hint_x=0.2)
         row.add_widget(DwellButton(text="Speak", icon="speak",
                                    on_selected=self._speak_text, **action))
@@ -1087,7 +1087,7 @@ class KeyboardScreen(AppScreen):
                                    on_selected=self._backspace, **action))
         # Repeatable, so that simply keeping the eyes on it gives the second selection.
         self.clear_btn = DwellButton(text="Clear", repeatable=True, on_selected=self._on_clear,
-                                     **{**action, "font_size": 26})
+                                     **{**action, "font_size": 34})
         row.add_widget(self.clear_btn)
         return row
 
@@ -1109,7 +1109,7 @@ class KeyboardScreen(AppScreen):
         """The Quick Access replies along the bottom (QUICK_ACCESS_WORDS)."""
         row = GridLayout(cols=len(QUICK_ACCESS_WORDS), spacing=10, size_hint_y=0.33)
         for word, color in QUICK_ACCESS_WORDS:
-            btn = DwellButton(text=word, bold=True, font_size=32, bg_color=color,
+            btn = DwellButton(text=word, bold=True, font_size=40, bg_color=color,
                               text_color=DARK_TEXT, radius=12,
                               on_selected=self._on_quick_access)
             row.add_widget(btn)
@@ -1175,7 +1175,7 @@ class KeyboardScreen(AppScreen):
         btn.role = role
         btn.key_value = value
         btn.text = text
-        btn.font_size = 44 if role == "char" else 30
+        btn.font_size = 64 if role == "char" else 40
         btn.icon = icon
         btn.icon_layout = "left" if text else "center"
         # Undo the text placement an icon may have set on this button before.
@@ -1439,14 +1439,14 @@ class QuickFireScreen(AppScreen):
     def __init__(self, navigator, **kwargs):
         super().__init__(navigator, **kwargs)
         self.current_category = None   # None: the categories are shown
-        self.step_label = Label(bold=True, font_size=30, color=WHITE)
+        self.step_label = Label(bold=True, font_size=38, color=WHITE)
         step_box = Panel(bg_color=PANEL_BG, border_color=KEY_BORDER, radius=12, size_hint_x=0.8)
         step_box.add_widget(self.step_label)
         # Rest (see REST_AFTER), the same size as Speak on the keyboard.
         controls = BoxLayout(orientation="horizontal", spacing=10)
         controls.add_widget(step_box)
         controls.add_widget(DwellButton(text="Rest", icon="moon", bg_color=KEY_FACE, text_color=WHITE,
-                                        radius=12, bold=True, font_size=20, icon_layout="top",
+                                        radius=12, bold=True, font_size=26, icon_layout="top",
                                         size_hint_x=0.2, on_selected=self._on_rest))
         self.tiles_panel = Panel(bg_color=PANEL_BG, border_color=KEY_BORDER, padding=10)
         self.build_frame(controls, self.tiles_panel)
@@ -1457,7 +1457,7 @@ class QuickFireScreen(AppScreen):
         self.step_label.text = "Pick a category"
         grid = GridLayout(cols=QUICKFIRE_COLUMNS, spacing=10)
         for name, (color, _phrases) in QUICKFIRE_CATEGORIES.items():
-            tile = DwellButton(text=name, bold=True, font_size=26, bg_color=color,
+            tile = DwellButton(text=name, bold=True, font_size=34, bg_color=color,
                                text_color=DARK_TEXT, radius=12,
                                image=CATEGORY_PICTURES.get(name), icon_layout="top",
                                on_selected=self._on_category)
@@ -1472,12 +1472,12 @@ class QuickFireScreen(AppScreen):
         color, phrases = QUICKFIRE_CATEGORIES[name]
         grid = GridLayout(cols=QUICKFIRE_COLUMNS, spacing=10)
         for phrase, picture in phrases:
-            tile = DwellButton(text=phrase, font_size=24, bg_color=color, text_color=DARK_TEXT,
+            tile = DwellButton(text=phrase, font_size=30, bg_color=color, text_color=DARK_TEXT,
                                radius=12, image=picture, icon_layout="top",
                                on_selected=self._on_phrase)
             tile.key_value = phrase
             grid.add_widget(tile)
-        grid.add_widget(DwellButton(text="Back", bold=True, font_size=26, icon="arrow_left",
+        grid.add_widget(DwellButton(text="Back", bold=True, font_size=34, icon="arrow_left",
                                     icon_layout="left", on_selected=self._on_back,
                                     **{**KEY_STYLE, "radius": 12}))
         self._show_grid(grid)
@@ -1659,6 +1659,28 @@ LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
 
 GREEN_TEXT = rgb(120, 220, 120)  # "Face detected"
 RED_TEXT = rgb(255, 120, 120)    # "Face not detected"
+AMBER_TEXT = rgb(255, 200, 90)   # an "OK" calibration result
+
+# Sizes on the calibration screens, in pixels. The screen shows 1920 x 1080
+# pixels on 21.5 x 13.5 cm, so about 85 pixels make 1 cm and a 34-pixel
+# text is about 4 mm tall. Made bigger on 13 November 2026, after the
+# engineers' evaluation said the calibration text and result were too
+# small to read from 40 cm. The live preview fills PREVIEW_WIDTH of the
+# screen's width (0.5 = half) and keeps the camera picture's shape.
+CALIBRATION_TEXT_SIZE = 32   # the instructions above the live preview
+FACE_TEXT_SIZE = 34          # "Face detected ..." under the live preview
+START_TEXT_SIZE = 38         # the Start Calibration button
+COUNTDOWN_TEXT_SIZE = 72     # "Calibration starts in 3"
+DOT_TEXT_SIZE = 30           # "Look at the red dot (1 of 9)" at the top edge
+RESULT_TITLE_SIZE = 64       # "Calibration done: Good"
+RESULT_TEXT_SIZE = 42        # "1.2 cm off (...), shaking 0.9 cm"
+RESULT_DETAILS_SIZE = 30     # camera pictures a second, distance, log file
+PREVIEW_WIDTH = 0.5
+
+
+def _hex(color):
+    """A colour (r, g, b, a from 0 to 1) as Kivy markup wants it: "78dc78"."""
+    return "".join(f"{round(c * 255):02x}" for c in color[:3])
 
 
 def save_gray_png(filename, image):
@@ -1704,8 +1726,8 @@ class CalibrationScreen(Screen):
         # Instructions at the top of the screen. Its height changes per
         # stage, so it never covers the preview or the dots.
         self.instruction_label = Label(
-            font_size=22, size_hint=(1, 0.2), pos_hint={"top": 1, "x": 0},
-            halign="center", valign="top",
+            font_size=CALIBRATION_TEXT_SIZE, size_hint=(1, 0.19), pos_hint={"top": 0.99, "x": 0},
+            halign="center", valign="top", line_height=1.1,
         )
         self.instruction_label.bind(size=lambda w, s: setattr(w, "text_size", s))
         self.add_widget(self.instruction_label)
@@ -1714,26 +1736,30 @@ class CalibrationScreen(Screen):
         # gaze_engine, so the user can SEE their face is being tracked.
         # Only shown in the READY stage: during the dots it would pull the
         # eyes away from the dot and spoil the measurements.
+        # "contain" lets the picture grow to fill its box (keeping its
+        # shape); the camera sends a 768 x 432 picture for the preview.
         self.preview_image = Image(
-            size_hint=(None, None), size=(640, 360),
-            pos_hint={"center_x": 0.5, "center_y": 0.5},
+            size_hint=(PREVIEW_WIDTH, 0.53), fit_mode="contain",
+            pos_hint={"center_x": 0.5, "top": 0.8},
         )
         self.add_widget(self.preview_image)
 
-        # "Face detected" / "Face not detected", just under the preview.
+        # "Face detected" / "Face not detected", just under the preview,
+        # on two lines: what the camera sees, then what to do.
         self.face_label = Label(
-            font_size=24, bold=True, size_hint=(1, 0.06),
-            pos_hint={"center_x": 0.5, "y": 0.2},
+            font_size=FACE_TEXT_SIZE, bold=True, size_hint=(1, 0.1),
+            pos_hint={"center_x": 0.5, "y": 0.165}, halign="center", valign="middle",
         )
+        self.face_label.bind(size=lambda w, s: setattr(w, "text_size", s))
         self.add_widget(self.face_label)
 
         # The Start button. It works by touch/click (for the caregiver) and
         # by dwell (resting the pointer on it), like every other button.
         self.start_btn = DwellButton(
-            text="Start Calibration", bold=True, font_size=28,
+            text="Start Calibration", bold=True, font_size=START_TEXT_SIZE,
             bg_color=PURPLE, text_color=WHITE, radius=16,
-            size_hint=(None, None), size=(380, 90),
-            pos_hint={"center_x": 0.5, "y": 0.06},
+            size_hint=(None, None), size=(480, 115),
+            pos_hint={"center_x": 0.5, "y": 0.03},
             on_selected=lambda b: self._start_countdown(),
         )
         self.start_btn.bind(on_release=lambda b: self._start_countdown())
@@ -1758,7 +1784,7 @@ class CalibrationScreen(Screen):
         # Sharpen the camera picture for where the user sits now (see
         # FOCUS_ON_EYES in gaze_engine.py), so the preview is sharp too.
         self.gaze_engine.request_focus()
-        self._place_label("top", 22, 0.2)
+        self._place_label("top", CALIBRATION_TEXT_SIZE, 0.19)
         self.instruction_label.text = (
             "Get ready for calibration\n"
             "Sit about 40 cm from the camera, with your whole face in the camera view.\n"
@@ -1781,7 +1807,7 @@ class CalibrationScreen(Screen):
             # No camera (or MediaPipe failed) -- don't leave the user stuck
             # on this screen; continue with mouse control instead.
             self._stop_preview()
-            self.face_label.text = "No camera detected -- using mouse control instead."
+            self.face_label.text = "No camera detected\nUsing mouse control instead"
             self.face_label.color = RED_TEXT
             self._leave_after(2.0)
             return
@@ -1809,10 +1835,10 @@ class CalibrationScreen(Screen):
         distance = self.gaze_engine.get_face_distance_cm()
         if self.gaze_engine.is_focusing() and distance is not None:
             # The face has been seen; the camera is focusing on the eyes.
-            self.face_label.text = "Face detected -- focusing the camera on your eyes..."
+            self.face_label.text = "Face detected\nFocusing the camera on your eyes..."
             self.face_label.color = WHITE
         elif feature is None:
-            self.face_label.text = "Face not detected -- move into the camera view"
+            self.face_label.text = "Face not detected\nMove into the camera view"
             self.face_label.color = RED_TEXT
         else:
             # The IR glints are not needed to start: when they are not seen
@@ -1820,16 +1846,16 @@ class CalibrationScreen(Screen):
             # they hide under the upper eyelid at the bottom dots), the
             # iris is used instead (see _fit_axis in gaze_engine.py). So a
             # missing glint is only mentioned, not shown as a problem.
-            glints = "IR glints seen" if feature[1] is not None else "no IR glints, the iris will be used"
-            advice, color = "press Start when you are ready", GREEN_TEXT
+            glints = "IR glints seen" if feature[1] is not None else "no IR glints (the iris will be used)"
+            advice, color = "Press Start when you are ready", GREEN_TEXT
             if distance is not None:
                 glints += f", {distance:.0f} cm from the camera"
                 # See BEST_DISTANCE_CM. Start still works; this is advice.
                 if distance > BEST_DISTANCE_CM + DISTANCE_TOLERANCE_CM:
-                    advice, color = f"move closer, to about {BEST_DISTANCE_CM} cm", WHITE
+                    advice, color = f"Move closer, to about {BEST_DISTANCE_CM} cm", WHITE
                 elif distance < BEST_DISTANCE_CM - DISTANCE_TOLERANCE_CM:
-                    advice, color = f"move back, to about {BEST_DISTANCE_CM} cm", WHITE
-            self.face_label.text = f"Face detected ({glints}) -- {advice}"
+                    advice, color = f"Move back, to about {BEST_DISTANCE_CM} cm", WHITE
+            self.face_label.text = f"Face detected: {glints}\n{advice}"
             self.face_label.color = color
 
         # The camera works, so the user may start now.
@@ -1841,13 +1867,16 @@ class CalibrationScreen(Screen):
             self._preview_event.cancel()
             self._preview_event = None
 
-    def _place_label(self, where, font_size, height):
+    def _place_label(self, where, font_size, height, markup=False):
         """Moves the instruction text: "top" = a strip along the top edge,
-        "center" = large in the middle of the screen (countdown, result)."""
+        "center" = large in the middle of the screen (countdown, result).
+        markup=True lets the text change size and colour line by line
+        (Kivy markup such as [size=64]...[/size]); only the result uses it."""
+        self.instruction_label.markup = markup
         self.instruction_label.font_size = font_size
         self.instruction_label.size_hint_y = height
         if where == "top":
-            self.instruction_label.pos_hint = {"x": 0, "top": 1}
+            self.instruction_label.pos_hint = {"x": 0, "top": 0.99}
             self.instruction_label.valign = "top"
         else:
             self.instruction_label.pos_hint = {"x": 0, "center_y": 0.5}
@@ -1864,7 +1893,7 @@ class CalibrationScreen(Screen):
         self.remove_widget(self.start_btn)
         self.preview_image.opacity = 0   # hide the preview from now on
         self.face_label.text = ""
-        self._place_label("center", 48, 0.3)
+        self._place_label("center", COUNTDOWN_TEXT_SIZE, 0.35)
         self._countdown_left = COUNTDOWN_SECONDS
         self._show_countdown()
         self._countdown_event = Clock.schedule_interval(self._countdown_tick, 1.0)
@@ -1888,7 +1917,7 @@ class CalibrationScreen(Screen):
         self._countdown_event.cancel()
         self._countdown_event = None
         # Smaller text in a thin strip at the top, so it never covers a dot.
-        self._place_label("top", 20, 0.1)
+        self._place_label("top", DOT_TEXT_SIZE, 0.1)
         self.stage = "dots"
         self._show_current_target()
 
@@ -2140,7 +2169,7 @@ class CalibrationScreen(Screen):
     def _show_result(self):
         self.dot.pos = (-100, -100)
         self.stage = "result"
-        self._place_label("center", 24, 0.8)
+        self._place_label("center", RESULT_TEXT_SIZE, 0.8, markup=True)
         fps = self.gaze_engine.get_fps()
         saved = self._save_log()
         distance = self.gaze_engine.get_face_distance_cm()
@@ -2148,12 +2177,23 @@ class CalibrationScreen(Screen):
                    f"face {distance:.0f} cm from the camera" if distance is not None else "",
                    f"saved to {saved}" if saved else ""]
         details = ", ".join(d for d in details if d)
-        self.instruction_label.text = self.summary + (f"\n({details})" if details else "")
+        # The first line (the rating) is the biggest, in green (Good),
+        # amber (OK) or red (Poor, or calibration did not work).
+        title, *rest = self.summary.split("\n")
+        color = (GREEN_TEXT if title.endswith(": Good") else AMBER_TEXT if title.endswith(": OK")
+                 else RED_TEXT if ("Poor" in title or "did not work" in title) else WHITE)
+        lines = [f"[size={RESULT_TITLE_SIZE}][b][color={_hex(color)}]{escape_markup(title)}"
+                 f"[/color][/b][/size]"]
+        lines += [escape_markup(line) for line in rest]
         # A Pi that slows itself down makes fewer pictures a second, and
         # the tracking suffers (see _pi_health in gaze_engine.py).
         slowdown = self.gaze_engine.get_slowdown()
         if slowdown:
-            self.instruction_label.text += f"\nWarning: the Pi is slowed down: {slowdown}"
+            lines.append(f"[color={_hex(RED_TEXT)}]Warning: the Pi is slowed down: "
+                         f"{escape_markup(slowdown)}[/color]")
+        if details:
+            lines.append(f"[size={RESULT_DETAILS_SIZE}]({escape_markup(details)})[/size]")
+        self.instruction_label.text = "\n".join(lines)
         self._leave_after(RESULT_SECONDS)  # long enough to read (or photograph) the result
 
     def _save_log(self):
