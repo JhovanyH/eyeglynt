@@ -81,6 +81,8 @@ TILE_ORANGE = rgb(252, 187, 117) # Pain tiles
 TILE_BLUE = rgb(163, 203, 250)   # People/Family tiles
 WHITE = rgb(255, 255, 255)
 DARK_TEXT = rgb(30, 30, 30)
+REST_BG = rgb(22, 22, 28)          # the resting screen (see REST_AFTER): dark, calm
+REST_TEXT = rgb(165, 165, 180)
 PLACEHOLDER = rgb(140, 140, 140)
 
 # Quick-Fire pictures (Mulberry Symbols, CC BY-SA 4.0; see
@@ -201,6 +203,22 @@ SHOW_GAZE_POINTER = False
 # (asked for on 12 November), "keyboard" the keyboard. The tabs at the top
 # still switch between the two at any time.
 HOME_SCREEN = "quickfire"
+
+# RESTING (idle or sleep mode), asked for by the engineers who evaluated
+# EyeGlynt on 12 November. When the user is not using EyeGlynt, it shows a
+# dark resting screen with one big Start button. Nothing else can be
+# selected there, so the user can look anywhere without speaking or
+# typing by accident, and the camera pictures are processed only
+# LOW_POWER_FPS times a second (gaze_engine.py) to save power and heat.
+#   - The user can rest it with the Rest button on Quick Fires.
+#   - It rests by itself after REST_AFTER seconds without any selection
+#     on the keyboard or Quick Fires (0 = never). 3 minutes, so the
+#     2-minute free-look test is never cut short.
+#   - Looking at Start for the dwell time goes back to the same screen.
+# The caregiver dashboard shows the device as "idle" while it rests and
+# sends no "gaze lost" alerts, so a user who closes their eyes to sleep
+# doesn't set them off. Recalibrate on the dashboard still works.
+REST_AFTER = 180  # seconds
 
 # ---------------------------------------------------------------------------
 # 1. TEXT-TO-SPEECH
@@ -895,6 +913,9 @@ class Navigator:
         self.sm = screen_manager
 
     def go(self, name):
+        if name == "rest" and self.sm.current != "rest":
+            # Start on the resting screen comes back here.
+            self.sm.get_screen("rest").return_to = self.sm.current
         self.sm.current = name
 
 
@@ -1419,10 +1440,16 @@ class QuickFireScreen(AppScreen):
         super().__init__(navigator, **kwargs)
         self.current_category = None   # None: the categories are shown
         self.step_label = Label(bold=True, font_size=30, color=WHITE)
-        step_box = Panel(bg_color=PANEL_BG, border_color=KEY_BORDER, radius=12)
+        step_box = Panel(bg_color=PANEL_BG, border_color=KEY_BORDER, radius=12, size_hint_x=0.8)
         step_box.add_widget(self.step_label)
+        # Rest (see REST_AFTER), the same size as Speak on the keyboard.
+        controls = BoxLayout(orientation="horizontal", spacing=10)
+        controls.add_widget(step_box)
+        controls.add_widget(DwellButton(text="Rest", icon="moon", bg_color=KEY_FACE, text_color=WHITE,
+                                        radius=12, bold=True, font_size=20, icon_layout="top",
+                                        size_hint_x=0.2, on_selected=self._on_rest))
         self.tiles_panel = Panel(bg_color=PANEL_BG, border_color=KEY_BORDER, padding=10)
-        self.build_frame(step_box, self.tiles_panel)
+        self.build_frame(controls, self.tiles_panel)
         self._show_categories()
 
     def _show_categories(self):
@@ -1477,8 +1504,57 @@ class QuickFireScreen(AppScreen):
         self.step_label.text = f"Said: {btn.key_value}"
         self.nav.sm.get_screen("keyboard").say(btn.key_value)
 
+    def _on_rest(self, btn):
+        tell_dashboard(btn, "quickfire", "control", "qf:rest", "Rest (resting screen)",
+                       navigation=True)
+        self.nav.go("rest")
+
     def on_pre_enter(self, *args):
         self._show_categories()   # always start from the categories
+
+
+class RestScreen(Screen):
+    """The resting screen (idle or sleep mode, see REST_AFTER): dark, with
+    one big Start button and nothing else to select. While it is shown,
+    the gaze engine processes fewer pictures (LOW_POWER_FPS). Looking at
+    Start for the dwell time goes back to the screen the user was on."""
+
+    def __init__(self, navigator, gaze_engine=None, **kwargs):
+        super().__init__(**kwargs)
+        self.nav = navigator
+        self.gaze_engine = gaze_engine
+        self.return_to = HOME_SCREEN   # set by Navigator.go("rest")
+        frame = Panel(bg_color=REST_BG, radius=0, orientation="vertical", padding=[40, 30], spacing=10)
+        frame.add_widget(Label(text="EyeGlynt is resting", bold=True, font_size=56,
+                               color=REST_TEXT, size_hint_y=0.2))
+        frame.add_widget(Label(text="Look at Start to use it again", font_size=36,
+                               color=REST_TEXT, size_hint_y=0.13))
+        row = BoxLayout(orientation="horizontal", size_hint_y=0.52)
+        row.add_widget(Widget(size_hint_x=0.3))
+        self.start_btn = DwellButton(text="Start", bold=True, font_size=48, bg_color=TILE_BLUE,
+                                     text_color=DARK_TEXT, radius=20, size_hint_x=0.4,
+                                     on_selected=self._on_start)
+        row.add_widget(self.start_btn)
+        row.add_widget(Widget(size_hint_x=0.3))
+        frame.add_widget(row)
+        frame.add_widget(Widget(size_hint_y=0.15))
+        self.add_widget(frame)
+
+    def _on_start(self, btn):
+        back_to = self.return_to if self.return_to in ("keyboard", "quickfire") else HOME_SCREEN
+        tell_dashboard(btn, back_to, "control", "rest:start", "Start (after resting)",
+                       navigation=True)
+        print(f"[Rest] Start: back to {back_to}")
+        self.nav.go(back_to)
+
+    def on_enter(self, *args):
+        print("[Rest] Resting: low power until Start is selected")
+        if self.gaze_engine is not None:
+            self.gaze_engine.set_low_power(True)
+
+    def on_leave(self, *args):
+        if self.gaze_engine is not None:
+            self.gaze_engine.set_low_power(False)
 
 
 # ---------------------------------------------------------------------------
@@ -2182,6 +2258,7 @@ class EyeGlyntApp(App):
         self.navigator = Navigator(sm)
         sm.add_widget(KeyboardScreen(self.navigator, name="keyboard"))
         sm.add_widget(QuickFireScreen(self.navigator, name="quickfire"))
+        sm.add_widget(RestScreen(self.navigator, gaze_engine=self.gaze_engine, name="rest"))
         sm.add_widget(
             CalibrationScreen(
                 gaze_engine=self.gaze_engine,
@@ -2196,7 +2273,25 @@ class EyeGlyntApp(App):
         # control if calibration didn't complete.
         self.gaze_manager = GazeManager(sm, gaze_engine=self.gaze_engine)
         Clock.schedule_interval(self._check_dashboard, 0.1)
+        # Resting by itself (see REST_AFTER): the time counts from the last
+        # selection, or from when the screen came up if that is later.
+        self._screen_since = time.time()
+        sm.bind(current=lambda *_: setattr(self, "_screen_since", time.time()))
+        Clock.schedule_interval(self._check_rest, 1.0)
         return sm
+
+    def _check_rest(self, dt):
+        """Runs every second: rests the app after REST_AFTER seconds
+        without a selection on the keyboard or Quick Fires."""
+        if not REST_AFTER or self.sm.current not in ("keyboard", "quickfire"):
+            return
+        target = self.gaze_manager._current_target
+        if target is not None and target.dwelling:
+            return   # a selection is on its way
+        idle = time.time() - max(self.gaze_manager._selected_at, self._screen_since)
+        if idle >= REST_AFTER:
+            print(f"[Rest] No selection for {REST_AFTER:.0f} s: resting")
+            self.navigator.go("rest")
 
     def _calibration_done(self):
         # A recalibration asked for on the dashboard counts as successful if
@@ -2208,8 +2303,8 @@ class EyeGlyntApp(App):
         """Runs 10 times a second: tells the caregiver dashboard what the
         device is doing, and carries out the dashboard's buttons."""
         calibrating = self.sm.current == "calibration"
-        if not self.gaze_engine.is_camera_ok():
-            state = "idle"   # no camera: mouse only
+        if not self.gaze_engine.is_camera_ok() or self.sm.current == "rest":
+            state = "idle"   # no camera (mouse only), or resting (see REST_AFTER)
         else:
             state = "calibrating" if calibrating else "tracking"
         dashboard.update(state, fps=self.gaze_engine.get_fps(),
