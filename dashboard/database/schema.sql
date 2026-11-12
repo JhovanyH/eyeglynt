@@ -70,7 +70,7 @@ CREATE TABLE sessions (
   care_setting        ENUM('Home','Hospital','Rehabilitation / Therapy Center',
                            'Long-term Care Facility','Other') NOT NULL,
   mode                ENUM('normal','test') NOT NULL DEFAULT 'normal',
-  dwell_time_ms       SMALLINT UNSIGNED NOT NULL DEFAULT 4000,   -- the device's fixed 4 s
+  dwell_time_ms       SMALLINT UNSIGNED NOT NULL DEFAULT 4000,   -- picked at Start: 2-6 s, 4 s default
   profile_id          INT UNSIGNED NULL,           -- calibration profile in use
   pre_session_notes   TEXT NULL,
   post_session_notes  TEXT NULL,
@@ -82,7 +82,7 @@ CREATE TABLE sessions (
   UNIQUE KEY uq_sessions_code (session_code),
   UNIQUE KEY uq_one_active_session (active_lock),
   KEY ix_sessions_patient (patient_id, started_at),
-  CONSTRAINT chk_dwell CHECK (dwell_time_ms BETWEEN 500 AND 5000),
+  CONSTRAINT chk_dwell CHECK (dwell_time_ms BETWEEN 500 AND 10000),
   CONSTRAINT chk_end   CHECK (ended_at IS NULL OR ended_at >= started_at),
   CONSTRAINT fk_sessions_patient   FOREIGN KEY (patient_id)   REFERENCES patients(patient_id),
   CONSTRAINT fk_sessions_caregiver FOREIGN KEY (caregiver_id) REFERENCES caregivers(caregiver_id),

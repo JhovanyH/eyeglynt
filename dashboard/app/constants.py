@@ -10,9 +10,17 @@ ROLES = [
 
 CARE_SETTINGS = ["Home", "Hospital", "Rehabilitation / Therapy Center", "Long-term Care Facility", "Other"]
 
-# EyeGlynt's dwell time is fixed at 4 seconds (DWELL_TIME in main.py).
-# It is no longer chosen on the dashboard; sessions just record it.
-DWELL_TIME_MS = 4000
+# Dwell time picked for a session on the Start page (milliseconds, label).
+# The device uses it for the whole session, then goes back to its own
+# DWELL_TIME (main.py, 4 s).
+DWELL_OPTIONS = [
+    (2000, "2 seconds"),
+    (3000, "3 seconds"),
+    (4000, "4 seconds (default)"),
+    (5000, "5 seconds"),
+    (6000, "6 seconds"),
+]
+DEFAULT_DWELL_MS = 4000
 
 # Thesis Table 7 — Performance Benchmarks
 BENCHMARKS = {
