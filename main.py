@@ -1615,7 +1615,7 @@ RESULT_SECONDS = 15             # how long the result stays on screen (to photog
 # any time with Stop calibration on the dashboard. CALIBRATION_TRIES = 1
 # goes on after any result, as before 13 November 2026.
 CALIBRATION_TRIES = 3
-RETRY_SECONDS = 10
+RETRY_SECONDS = 6
 
 # ACCURACY TEST (for testing, and for the results chapter). After
 # calibration, the red dot visits ACCURACY_TEST_POINTS, places between
