@@ -34,6 +34,11 @@ import zlib
 import numpy as np
 
 import pyttsx3
+# The screen is redrawn at most SCREEN_FPS times a second (Kivy's default
+# is 60). Must be set before the rest of Kivy is loaded. See SCREEN_FPS.
+from kivy.config import Config
+SCREEN_FPS = 30
+Config.set("graphics", "maxfps", str(SCREEN_FPS))
 from kivy.app import App
 from kivy.core.window import Window
 from kivy.uix.screenmanager import ScreenManager, Screen
@@ -129,6 +134,17 @@ LEAVE_DELAY = 0.3    # seconds: the pointer must stay away from the button this
 # leave and come back, so resting the eyes on one spot can't keep
 # selecting (group, letter, group, letter...).
 NEW_KEY_PAUSE = 1.0  # seconds
+
+# How often the screen code runs. The screen and the eye tracking share
+# the Pi's processor, and Python lets only one of them run Python code at a
+# time. On 12 November the tracking ran at 8-9 pictures a second during
+# calibration but only about 6 while typing, when a button was nearly
+# always filling up: each step of the fill redraws the whole screen. The
+# fill now moves 10 times a second (smooth enough over a 4-second dwell),
+# and the gaze is checked 15 times a second (the camera gives fewer
+# pictures than that anyway). SCREEN_FPS (above) caps all redrawing.
+DWELL_FILL_RATE = 10   # times a second the dwell progress bar moves
+GAZE_CHECK_RATE = 15   # times a second the pointer is checked against the buttons
 REPEAT_TIME = DWELL_TIME  # held keys repeat at the SAME rate as the initial dwell,
                           # so there's only one dwell-time value to document/defend.
                           # Set this to a different (smaller) number later if you
@@ -532,7 +548,7 @@ class DwellButton(Button):
             return  # already dwelling on this button
         self.progress = 0.0
         self._active_dwell_time = dwell_time if dwell_time is not None else self.dwell_time
-        self._event = Clock.schedule_interval(self._tick, 1 / 30)
+        self._event = Clock.schedule_interval(self._tick, 1 / DWELL_FILL_RATE)
 
     def cancel_dwell(self):
         if self._event is not None:
@@ -653,7 +669,7 @@ class GazeManager:
         self._dwell_start = None
         self._last_step = None
         DwellButton.selection_listener = self._on_selection
-        Clock.schedule_interval(self._update, 1 / 30)
+        Clock.schedule_interval(self._update, 1 / GAZE_CHECK_RATE)
 
     def _gaze_pos(self):
         """Where the gaze pointer is, (x, y) in window pixels, before it is
