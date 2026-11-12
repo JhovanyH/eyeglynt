@@ -90,6 +90,11 @@ if [ ! -f certs/cert.pem ] || [ ! -f certs/key.pem ]; then
 else
     echo "Keeping the HTTPS certificate that is already there."
 fi
+# gthread (8 threads per worker): phone browsers open extra connections
+# that send nothing for a while. With the plain "sync" workers, two such
+# connections froze the whole dashboard for 30 s, so pages and the Live
+# screen hung. --keep-alive 5 lets the Live screen's poll every 2 s reuse
+# its connection instead of setting up HTTPS again each time.
 sudo tee /etc/systemd/system/eyeglynt-dashboard.service >/dev/null <<SERVICE
 [Unit]
 Description=EyeGlynt Caregiver Dashboard
@@ -98,7 +103,7 @@ After=network.target mariadb.service
 [Service]
 User=$USER
 WorkingDirectory=$DASH
-ExecStart=$DASH/venv/bin/gunicorn -w 2 -b 0.0.0.0:5000 --certfile $DASH/certs/cert.pem --keyfile $DASH/certs/key.pem run:app
+ExecStart=$DASH/venv/bin/gunicorn -w 2 -k gthread --threads 8 --keep-alive 5 -b 0.0.0.0:5000 --certfile $DASH/certs/cert.pem --keyfile $DASH/certs/key.pem run:app
 Restart=always
 
 [Install]
@@ -131,5 +136,6 @@ for ip in $(hostname -I); do
     case "$ip" in *:*) ;; *) echo "    https://$ip:5000" ;; esac
 done
 echo "    or https://$(hostname).local:5000"
+echo "    or, when the Pi is its own Wi-Fi hotspot: https://10.42.0.1:5000"
 echo "(https, not http. The first time, the browser warns that the connection"
 echo " is not private: tap Advanced, then Proceed. It is your own Pi.)"
