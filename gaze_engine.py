@@ -40,7 +40,9 @@ iris measurements still work, and up/down falls back to the mouse if
 iy doesn't fit well enough.
 """
 
+import logging
 import os
+import subprocess
 import threading
 import time
 import urllib.request
@@ -253,6 +255,16 @@ OPENNESS_HISTORY = 30
 # but more lag; higher alpha = snappier but jumpier. Tune this once
 # testing with real users -- worth documenting the chosen value and why,
 # same as your dwell-time threshold.
+# The smoothing is set in seconds (SMOOTHING_TIME): each new reading
+# counts more the longer it has been since the last one. It used to be a
+# fixed share per picture (0.25), so at fewer pictures a second the
+# pointer trailed behind the eyes for longer: about 1.3 s at 9 pictures
+# a second, but 2.4 s at 5 and 4 s at 3. The calibration dots were then
+# partly measured while the readings were still on their way from the
+# previous dot. 0.4 s is what 0.25 per picture gave at 9 pictures a second.
+SMOOTHING_TIME = 0.4    # seconds
+# The same kind of averaging, per picture, for things the eyes remember
+# (see _Eye: where the pupil usually is, the gap between the glints).
 SMOOTHING_ALPHA = 0.25
 
 # After calibration, each axis is only used if a straight line fits the
@@ -332,7 +344,49 @@ TILT_PAIRS = [(10, 0), (168, 2), (9, 164)]        # top of the forehead / top of
                                                   # eyebrows, each with a point between the nose and lips
 # The head moves slowly, and MediaPipe's depth is less steady than its
 # x and y, so the head's pose is smoothed more than the eye measurements.
-HEAD_SMOOTHING_ALPHA = 0.1
+HEAD_SMOOTHING_TIME = 1.0   # seconds (was 0.1 per picture, about 1 s at 9 pictures a second)
+
+
+# picamera2 writes a DEBUG line for every camera job; they flooded the
+# terminal (12 November) and hid the app's own lines.
+logging.getLogger("picamera2").setLevel(logging.INFO)
+
+
+def _pi_health():
+    """The Pi's processor temperature and whether the Pi is slowing itself
+    down, read from the files its system keeps (cheap, a few times a
+    minute). Returns (temperature in °C or None, reason or None). A Pi
+    slows its processor down when its power supply gives too little
+    voltage ("under-voltage": a weak adapter or cable, or too much drawn
+    from its pins), or when it gets too hot (about 80 °C). MediaPipe and
+    the eye measurements then take up to twice as long or more, so there
+    are fewer pictures a second. (None, None) on other computers."""
+    temperature = None
+    try:
+        with open("/sys/class/thermal/thermal_zone0/temp") as f:
+            temperature = int(f.read().strip()) / 1000
+    except (OSError, ValueError):
+        pass
+    flags = None
+    try:
+        with open("/sys/devices/platform/soc/soc:firmware/get_throttled") as f:
+            flags = int(f.read().strip(), 16)
+    except (OSError, ValueError):
+        try:   # older systems: ask the firmware with the vcgencmd tool
+            answer = subprocess.run(["vcgencmd", "get_throttled"], capture_output=True,
+                                    text=True, timeout=2).stdout   # "throttled=0x50005"
+            flags = int(answer.strip().split("=")[1], 16)
+        except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+            pass
+    reason = None
+    if flags is not None:
+        if flags & 0x1:
+            reason = "power supply too weak (under-voltage)"
+        elif flags & 0xE:
+            reason = "too hot"
+        elif flags & 0x10000:
+            reason = "power supply too weak at moments (under-voltage since start-up)"
+    return temperature, reason
 
 
 def _ensure_model_downloaded():
@@ -572,7 +626,21 @@ def _group_touching(mask):
 def _neighbourhood(image, size, combine):
     """Combines each pixel with the (2*size+1) x (2*size+1) square around
     it. combine="mean" blurs (removes single-pixel noise), "min" takes the
-    darkest neighbour, "max" the brightest."""
+    darkest neighbour, "max" the brightest.
+
+    With OpenCV (installed on the Pi together with MediaPipe), its own
+    filters do this, many times faster than the numpy version below, which
+    is kept for computers without OpenCV. Both repeat the edge pixels
+    outwards, so they give the same result."""
+    if cv2 is not None:
+        image = image.astype(np.float32)
+        square = (2 * size + 1, 2 * size + 1)
+        if combine == "mean":
+            return cv2.blur(image, square, borderType=cv2.BORDER_REPLICATE)
+        kernel = np.ones(square, np.uint8)
+        if combine == "min":
+            return cv2.erode(image, kernel, borderType=cv2.BORDER_REPLICATE)
+        return cv2.dilate(image, kernel, borderType=cv2.BORDER_REPLICATE)
     padded = np.pad(image.astype(float), size, mode="edge")
     h, w = image.shape
     shifted = [padded[dy:dy + h, dx:dx + w]
@@ -689,38 +757,49 @@ class _Smoother:
 
     1. Spike filter: the middle value (median) of the last 3 readings,
        so a single bad reading, such as a wrong glint, is ignored.
-    2. Exponential moving average (`alpha`, normally SMOOTHING_ALPHA) to
-       calm the jitter.
+    2. Exponential moving average over about `smoothing_time` seconds
+       (normally SMOOTHING_TIME) to calm the jitter.
     3. When a reading is missing (None: no glint, or a blink), the last
        value is kept for up to `hold_time` seconds, then forgotten
        (see IRIS_HOLD_TIME and GLINT_HOLD_TIME).
 
     `value` is the cleaned-up measurement, or None if there is none.
+    `latest` is this picture's reading after step 1 only (None if this
+    picture had none). The calibration averages these at each dot: the
+    average over the dot already calms the jitter, and unlike `value`
+    they don't trail behind the eyes (see SMOOTHING_TIME).
     """
 
-    def __init__(self, hold_time, alpha=SMOOTHING_ALPHA):
+    def __init__(self, hold_time, smoothing_time=SMOOTHING_TIME):
         self.hold_time = hold_time
-        self.alpha = alpha
+        self.smoothing_time = smoothing_time
         self.reset()
 
     def reset(self):
         self.value = None
+        self.latest = None
         self._recent = []              # the last 3 readings
         self._last_reading_time = None
 
     def update(self, reading):
         now = time.time()
+        self.latest = None
         if reading is None:
             if self._last_reading_time is not None and now - self._last_reading_time > self.hold_time:
                 self.reset()  # gone for too long: forget the old value
             return
+        since_last = None if self._last_reading_time is None else now - self._last_reading_time
         self._last_reading_time = now
         self._recent = (self._recent + [reading])[-3:]
         spike_free = float(np.median(self._recent))
+        self.latest = spike_free
         if self.value is None:
             self.value = spike_free  # first reading: nothing to blend with yet
         else:
-            self.value = self.alpha * spike_free + (1 - self.alpha) * self.value
+            # The new reading's share grows with the time since the last
+            # one, so the smoothing takes the same time at any frame rate.
+            alpha = 1.0 - np.exp(-since_last / self.smoothing_time)
+            self.value = alpha * spike_free + (1 - alpha) * self.value
 
 
 class _Eye:
@@ -1208,11 +1287,12 @@ class GazeEngine:
     def __init__(self):
         self._lock = threading.Lock()
         self._latest_feature = None  # (fx, vy, iy, hx), or None if no face seen
+        self._latest_raw_feature = None  # the same, not averaged over time (see get_latest_raw_feature)
         # Cleaned-up measurements (see _Smoother), background-thread only.
         self._fx = _Smoother(IRIS_HOLD_TIME)
         self._iy = _Smoother(IRIS_HOLD_TIME)
         self._face_size = _Smoother(IRIS_HOLD_TIME)
-        self._head = [_Smoother(IRIS_HOLD_TIME, HEAD_SMOOTHING_ALPHA) for _ in range(4)]  # see _head_pose
+        self._head = [_Smoother(IRIS_HOLD_TIME, HEAD_SMOOTHING_TIME) for _ in range(4)]  # see _head_pose
         self._eyes = [_Eye(RIGHT_IRIS_CENTER, RIGHT_IRIS_EDGE, RIGHT_EYE_CORNERS),
                       _Eye(LEFT_IRIS_CENTER, LEFT_IRIS_EDGE, LEFT_EYE_CORNERS)]
         self._openness_history = []  # eye openness in recent frames, for the blink check
@@ -1223,6 +1303,7 @@ class GazeEngine:
         self._latest_eyes = None  # (full frame, glint/pupil points, iris centres, landmarks,
                                   #  picture number) for close-ups and eye pictures
         self._fps = None          # pictures processed per second, measured
+        self._slowdown = None     # why the Pi is slowing itself down, if it is (see _pi_health)
         self._focus_requested = FOCUS_ON_EYES  # True: focus the lens on the eyes (see FOCUS_ON_EYES)
         self._focusing = False    # True while that is being done
         self._lens = None         # the lens position it chose (dioptres), None until then
@@ -1346,7 +1427,11 @@ class GazeEngine:
             if time.time() - fps_start >= 5:
                 self._fps = fps_count / (time.time() - fps_start)
                 times = ", ".join(f"{name} {seconds / fps_count * 1000:.0f} ms" for name, seconds in spent.items())
-                print(f"[GazeEngine] {self._fps:.1f} pictures a second; per picture: {times}")
+                temperature, self._slowdown = _pi_health()
+                health = f"; processor {temperature:.0f} °C" if temperature is not None else ""
+                if self._slowdown:
+                    health += f"; THE PI IS SLOWED DOWN: {self._slowdown}"
+                print(f"[GazeEngine] {self._fps:.1f} pictures a second; per picture: {times}{health}")
                 fps_count, fps_start = 0, time.time()
                 spent = dict.fromkeys(spent, 0.0)
             # MediaPipe gets a smaller copy (every Nth pixel). It needs a
@@ -1364,7 +1449,7 @@ class GazeEngine:
             eyes = None
             fh, fw = frame.shape[:2]
             if not result.face_landmarks:
-                feature = None
+                feature = raw_feature = None
                 # Reset so re-acquiring doesn't drag from a stale position.
                 self._reset_measurements()
             else:
@@ -1408,6 +1493,11 @@ class GazeEngine:
                     feature = None  # eyes closed for over a second
                 else:
                     feature = (self._fx.value, vy, self._iy.value, hx)
+                # This picture's own readings (see get_latest_raw_feature).
+                raw_feature = None
+                if self._fx.latest is not None and self._iy.latest is not None:
+                    raw_feature = (self._fx.latest, _average_known([eye.vy.latest for eye in self._eyes]),
+                                   self._iy.latest, _average_known([eye.hx.latest for eye in self._eyes]))
 
                 # Preview dots: green = iris (MediaPipe), white = glint,
                 # yellow = pupil found in the picture.
@@ -1420,6 +1510,7 @@ class GazeEngine:
 
             with self._lock:
                 self._latest_feature = feature
+                self._latest_raw_feature = raw_feature
                 head = [smoother.value for smoother in self._head]
                 self._latest_head = None if None in head else tuple(head)
                 self._latest_face_size = self._face_size.value
@@ -1450,6 +1541,7 @@ class GazeEngine:
         self._focusing = True
         with self._lock:
             self._latest_feature = None   # the pictures aren't measured meanwhile
+            self._latest_raw_feature = None
         started = time.time()
         sharpness = {}   # lens position -> how sharp the eyes were there
 
@@ -1487,6 +1579,14 @@ class GazeEngine:
         with self._lock:
             return self._latest_feature
 
+    def get_latest_raw_feature(self):
+        """Like get_latest_feature, but this picture's own readings, only
+        cleared of single bad readings, not averaged over time (see
+        _Smoother); None if this picture had no reading (no face, a
+        blink). The calibration averages these at each dot."""
+        with self._lock:
+            return self._latest_raw_feature
+
     def get_debug_frame(self):
         """Returns the latest camera frame (RGB numpy array, with iris,
         glint and pupil dots drawn on it) for showing a live preview, or
@@ -1499,6 +1599,10 @@ class GazeEngine:
         or None if no face is currently detected."""
         with self._lock:
             return self._latest_head
+
+    def get_slowdown(self):
+        """Why the Pi is slowing itself down (see _pi_health), or None."""
+        return self._slowdown
 
     def get_fps(self):
         """Pictures processed per second, or None until it's measured."""
