@@ -196,6 +196,12 @@ DRIFT_PAGE_OPENERS = ("group", "category")   # button roles whose step Back take
 # to True only to check where the pointer is.
 SHOW_GAZE_POINTER = False
 
+# HOME SCREEN: the screen shown after every calibration (and after Stop
+# calibration on the dashboard). "quickfire" opens the Quick Fires phrases
+# (asked for on 12 November), "keyboard" the keyboard. The tabs at the top
+# still switch between the two at any time.
+HOME_SCREEN = "quickfire"
+
 # ---------------------------------------------------------------------------
 # 1. TEXT-TO-SPEECH
 # ---------------------------------------------------------------------------
@@ -2196,7 +2202,7 @@ class EyeGlyntApp(App):
         # A recalibration asked for on the dashboard counts as successful if
         # the gaze engine is calibrated again (see dashboard_link.py).
         dashboard.recalibration_finished(success=self.gaze_engine.is_calibrated())
-        self.sm.current = "keyboard"
+        self.sm.current = HOME_SCREEN
 
     def _check_dashboard(self, dt):
         """Runs 10 times a second: tells the caregiver dashboard what the
@@ -2215,11 +2221,11 @@ class EyeGlyntApp(App):
                 if not calibrating:
                     self.sm.current = "calibration"
             elif command == "cancel_recalibration" and self.sm.current == "calibration":
-                # The caregiver pressed Stop calibration: back to the keyboard
-                # with the calibration from before.
+                # The caregiver pressed Stop calibration: back to the home
+                # screen with the calibration from before.
                 self.sm.get_screen("calibration").cancel()
                 dashboard.recalibration_cancelled()
-                self.sm.current = "keyboard"
+                self.sm.current = HOME_SCREEN
             elif command in ("start_session", "set_dwell_time") and details.get("dwell_time_ms"):
                 # The dwell time the caregiver picked for this session.
                 set_dwell_time(details["dwell_time_ms"] / 1000)
