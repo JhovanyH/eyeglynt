@@ -22,6 +22,7 @@ RUN
 import csv
 import importlib.util
 import json
+import logging
 import os
 import queue
 import shutil
@@ -197,6 +198,9 @@ APLAY = shutil.which("aplay")   # plays the sound; None when not on Linux
 # play the sound (that is, on the Pi).
 USE_PIPER = (importlib.util.find_spec("piper") is not None
              and os.path.exists(VOICE_FILE) and APLAY is not None)
+# The Piper voice writes a DEBUG line with the sounds of every message;
+# they cluttered the terminal (12 November).
+logging.getLogger("piper").setLevel(logging.INFO)
 
 # Backup voice, espeak-ng: 100 is its normal volume and 200 the loudest.
 ESPEAK_VOLUME = 200
@@ -1585,6 +1589,7 @@ class CalibrationScreen(Screen):
         # The button is added once the first camera picture arrives.
         if self.start_btn.parent is not None:
             self.remove_widget(self.start_btn)
+        self._shown_frame = None   # the camera picture on show (see _update_preview)
         self._preview_event = Clock.schedule_interval(self._update_preview, 1 / 15)
 
     def _update_preview(self, dt):
@@ -1603,12 +1608,20 @@ class CalibrationScreen(Screen):
         if frame is None:
             return  # camera still starting up
 
-        h, w = frame.shape[:2]
-        flipped = frame[::-1]  # Kivy textures are bottom-up; camera frames are top-down
-        texture = Texture.create(size=(w, h), colorfmt="rgb")
-        texture.blit_buffer(flipped.tobytes(), colorfmt="rgb", bufferfmt="ubyte")
-        self.preview_image.texture = texture
-        self.preview_image.opacity = 1
+        # Only a new picture is drawn, into the same texture each time:
+        # making a new texture 15 times a second (as before) took time
+        # away from the gaze engine, which shares the processor.
+        if frame is not self._shown_frame:
+            self._shown_frame = frame
+            h, w = frame.shape[:2]
+            texture = self.preview_image.texture
+            if texture is None or tuple(texture.size) != (w, h):
+                texture = Texture.create(size=(w, h), colorfmt="rgb")
+                texture.flip_vertical()  # Kivy textures are bottom-up; camera frames are top-down
+                self.preview_image.texture = texture
+            texture.blit_buffer(frame.tobytes(), colorfmt="rgb", bufferfmt="ubyte")
+            self.preview_image.canvas.ask_update()
+            self.preview_image.opacity = 1
 
         feature = self.gaze_engine.get_latest_feature()
         distance = self.gaze_engine.get_face_distance_cm()
@@ -1715,6 +1728,7 @@ class CalibrationScreen(Screen):
         self.samples_iy = []   # iy readings (up/down, iris against the eye corners)
         self.samples_hx = []   # hx readings (left/right, glints), only when a glint is seen
         self.pointer_samples = []  # accuracy test: where the gaze pointer was
+        self.smoothed_samples = [] # (fx, vy, iy, hx) as averaged for the pointer
         self._pictures_at_dot = 0  # eye pictures kept at this dot (SAVE_EYE_PICTURES)
         self._target_start_time = time.time()
         self._sample_event = Clock.schedule_interval(self._collect_sample, 1 / 30)
@@ -1722,23 +1736,34 @@ class CalibrationScreen(Screen):
 
     def _collect_sample(self, dt):
         feature = self.gaze_engine.get_latest_feature()
+        # This picture's own readings, not averaged over time: averaged
+        # ones still trail behind the eyes after the move from the
+        # previous dot. Recomputed from 28 saved calibrations (12
+        # November), using these put the test dots 1.46 cm off instead of
+        # 1.74 cm on average, and 1.51 instead of 2.04 cm in the 14 that
+        # ran below 6.5 pictures a second.
+        raw = self.gaze_engine.get_latest_raw_feature()
         elapsed = time.time() - self._target_start_time
         pointer = (self.gaze_engine.get_screen_x(), self.gaze_engine.get_screen_y())
-        self._log(elapsed, feature, pointer)
+        self._log(elapsed, feature, pointer, raw)
         if elapsed >= CALIBRATION_SETTLE_TIME:
             self._keep_eye_picture(elapsed)
         if self.stage == "test" and elapsed >= CALIBRATION_SETTLE_TIME:
             self.pointer_samples.append(pointer)
         # Ignore the first moment at each dot: the eyes are still moving there.
         # (The test dots' readings are kept too, see TEST_DOTS_IN_CALIBRATION.)
-        if feature is not None and elapsed >= CALIBRATION_SETTLE_TIME:
-            fx, vy, iy, hx = feature
+        if raw is not None and elapsed >= CALIBRATION_SETTLE_TIME:
+            fx, vy, iy, hx = raw
             self.samples.append(fx)
             self.samples_iy.append(iy)
             if vy is not None:
                 self.samples_vy.append(vy)
             if hx is not None:
                 self.samples_hx.append(hx)
+        # The averaged readings, only to measure how much the pointer
+        # would shake (see _add_dot_to_calibration).
+        if feature is not None and elapsed >= CALIBRATION_SETTLE_TIME:
+            self.smoothed_samples.append(feature)
 
         remaining = max(0.0, CALIBRATION_CAPTURE_TIME - elapsed)
         point_num = self.target_index + 1
@@ -1765,7 +1790,7 @@ class CalibrationScreen(Screen):
         self.eye_pictures.append((self.stage, self.target_index + 1, round(target_x), round(target_y),
                                   round(elapsed, 3), picture))
 
-    def _log(self, elapsed, feature, pointer):
+    def _log(self, elapsed, feature, pointer, raw=None):
         """Keeps one reading for the CSV file (see RUN_ACCURACY_TEST)."""
         def rounded(value, digits):
             return None if value is None else round(value, digits)
@@ -1782,7 +1807,8 @@ class CalibrationScreen(Screen):
                                 rounded(self.gaze_engine.get_fps(), 1)]
                              + [rounded(v, 2) for v in (turn, tilt, head_x, head_y)]
                              + [rounded(self.gaze_engine.get_lens_position(), 3),
-                                rounded(self.gaze_engine.get_face_distance_cm(), 1)])
+                                rounded(self.gaze_engine.get_face_distance_cm(), 1)]
+                             + [rounded(v, 5) for v in (raw if raw is not None else (None,) * 4)])
 
     def _finish_current_target(self, dt):
         if self._sample_event is not None:
@@ -1828,9 +1854,13 @@ class CalibrationScreen(Screen):
             avg_hx = sum(self.samples_hx) / len(self.samples_hx)
         avg_iy = sum(self.samples_iy) / len(self.samples_iy)
         # How much each measurement wobbled at this dot (standard
-        # deviation); the gaze engine uses it to choose its fits.
-        shakes = tuple(float(np.std(values)) if len(values) >= 2 else None
-                       for values in (self.samples, self.samples_vy, self.samples_iy, self.samples_hx))
+        # deviation) after the averaging the pointer uses; the gaze
+        # engine uses it to choose its fits.
+        shakes = []
+        for index in range(4):
+            values = [sample[index] for sample in self.smoothed_samples if sample[index] is not None]
+            shakes.append(float(np.std(values)) if len(values) >= 2 else None)
+        shakes = tuple(shakes)
         self.gaze_engine.add_calibration_point(avg_fx, target_x, avg_vy, target_y, avg_iy, avg_hx,
                                                shakes=shakes)
 
@@ -1937,6 +1967,11 @@ class CalibrationScreen(Screen):
                    f"saved to {saved}" if saved else ""]
         details = ", ".join(d for d in details if d)
         self.instruction_label.text = self.summary + (f"\n({details})" if details else "")
+        # A Pi that slows itself down makes fewer pictures a second, and
+        # the tracking suffers (see _pi_health in gaze_engine.py).
+        slowdown = self.gaze_engine.get_slowdown()
+        if slowdown:
+            self.instruction_label.text += f"\nWarning: the Pi is slowed down: {slowdown}"
         self._leave_after(RESULT_SECONDS)  # long enough to read (or photograph) the result
 
     def _save_log(self):
@@ -1952,7 +1987,7 @@ class CalibrationScreen(Screen):
                 writer.writerow(["stage", "dot", "dot_x", "dot_y", "seconds",
                                  "fx", "vy", "iy", "hx", "pointer_x", "pointer_y", "camera_fps",
                                  "head_turn_deg", "head_tilt_deg", "head_x", "head_y",
-                                 "lens", "distance_cm"])
+                                 "lens", "distance_cm", "fx_raw", "vy_raw", "iy_raw", "hx_raw"])
                 writer.writerows(self.log_rows)
             self._save_eye_pictures(os.path.join(LOG_DIR, name[:-4] + "_eyes"))
             return f"logs/{name}"
