@@ -118,6 +118,17 @@ STICKY_MARGIN = 60   # pixels (about 1 cm): the button being dwelled on still
                      # counts as looked at while the pointer is this close to it
 LEAVE_DELAY = 0.3    # seconds: the pointer must stay away from the button this
                      # long before its dwell is cancelled (rides out blinks)
+# After a selection, a DIFFERENT key may appear right under the eyes
+# (opening "a b c d e" puts "a" where the group was; a Quick Fires
+# category puts a phrase there). That key starts its dwell after this
+# pause, without the eyes having to leave it and come back. The pause
+# lets the person see the new key first. The SAME key (a phrase that was
+# just spoken, Speak, Shift, 123, a tab) still waits until the eyes
+# leave it, so it is never selected twice by accident. This works once
+# in a row: after a key selected this way, the next one needs the eyes to
+# leave and come back, so resting the eyes on one spot can't keep
+# selecting (group, letter, group, letter...).
+NEW_KEY_PAUSE = 1.0  # seconds
 REPEAT_TIME = DWELL_TIME  # held keys repeat at the SAME rate as the initial dwell,
                           # so there's only one dwell-time value to document/defend.
                           # Set this to a different (smaller) number later if you
@@ -511,6 +522,11 @@ class DwellButton(Button):
             )
 
     # -- dwell timing (unchanged logic) -----------------------------------
+    @property
+    def dwelling(self):
+        """True while the progress bar is filling."""
+        return self._event is not None
+
     def start_dwell(self, dwell_time=None):
         if self._event is not None:
             return  # already dwelling on this button
@@ -624,6 +640,10 @@ class GazeManager:
         self._current_target = None
         self._away_since = None  # when the pointer left the current button, or None
         self._blocked = None     # a new button the gaze must leave before it can be used
+        # What was selected last and when, and whether its dwell was
+        # started by NEW_KEY_PAUSE (then the next key can't be).
+        self._selected, self._selected_at = None, 0.0
+        self._paused_start, self._after_paused_start = None, False
         self.pointer = None      # the test circle (SHOW_GAZE_POINTER), added in on_start
         # Re-centring (see DRIFT_CORRECTION): the gaze pointer's positions
         # (time, x, y) while dwelling on the current button, and the last
@@ -662,6 +682,9 @@ class GazeManager:
         """Runs at every dwell selection: re-centres the gaze pointer (see
         DRIFT_CORRECTION). The pointer's average while the user looked at
         the button, against the button's middle, is how far off it is."""
+        self._selected, self._selected_at = self._key_of(btn), time.time()
+        self._after_paused_start = btn is self._paused_start
+        self._paused_start = None
         points = [(x, y) for t, x, y in self._dwell_points
                   if self._dwell_start is not None and t - self._dwell_start >= DRIFT_SETTLE_TIME]
         self._dwell_points = []
@@ -729,8 +752,13 @@ class GazeManager:
             self._away_since = None
             self._dwell_points, self._dwell_start = [], None
             self._blocked = self._button_at(buttons, pos)
+        # It may still be used without leaving it if it is a different key
+        # from the one just selected (see NEW_KEY_PAUSE).
         if self._blocked is not None:
             if self._blocked in buttons and self._is_near(self._blocked, pos, STICKY_MARGIN):
+                if self._new_key_ready(self._blocked):
+                    self._current_target, self._blocked = self._blocked, None
+                    self._start_paused_dwell(self._current_target)
                 return
             self._blocked = None
 
@@ -738,6 +766,10 @@ class GazeManager:
         # on the current button while the pointer is near it...
         if current in buttons and self._is_near(current, pos, STICKY_MARGIN):
             self._away_since = None
+            # A keyboard key changes in place (the group becomes its first
+            # letter): once it shows a different key, it starts again.
+            if not current.dwelling and self._new_key_ready(current):
+                self._start_paused_dwell(current)
             return
         # ...and give it up only once the pointer has been away for a moment.
         if current in buttons:
@@ -756,6 +788,29 @@ class GazeManager:
             self._dwell_points, self._dwell_start = [], time.time()   # see _on_selection
             if target is not None:
                 target.start_dwell()
+
+    @staticmethod
+    def _key_of(btn):
+        """What a button stands for: its job and value on the keyboard
+        (a group, a letter, Space, 123/ABC...), else its phrase or text."""
+        role = getattr(btn, "role", None)
+        if role is not None:
+            return (role, getattr(btn, "key_value", ""))
+        return (None, getattr(btn, "key_value", None) or btn.text)
+
+    def _new_key_ready(self, btn):
+        """True if `btn` is a different key from the one selected last,
+        NEW_KEY_PAUSE has passed since, and that key's own dwell wasn't
+        started this way (see NEW_KEY_PAUSE)."""
+        return (not self._after_paused_start and self._key_of(btn) != self._selected
+                and time.time() - self._selected_at >= NEW_KEY_PAUSE)
+
+    def _start_paused_dwell(self, btn):
+        """Starts the dwell of a key the eyes didn't have to leave (see
+        NEW_KEY_PAUSE)."""
+        self._dwell_points, self._dwell_start = [], time.time()   # see _on_selection
+        self._paused_start = btn
+        btn.start_dwell()
 
     def _button_at(self, buttons, pos):
         """The button directly under `pos`, or None."""
