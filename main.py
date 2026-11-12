@@ -1604,7 +1604,7 @@ FOCUS_WAIT_SECONDS = 10
 # 9 November the face was about 55 cm away.
 BEST_DISTANCE_CM = 40
 DISTANCE_TOLERANCE_CM = 7
-RESULT_SECONDS = 15             # how long the result stays on screen (to photograph it)
+RESULT_SECONDS = 10             # how long the result stays on screen (to photograph it)
 # CALIBRATING AGAIN. A result that says "please calibrate again" (Poor,
 # up/down did not work, or calibration did not work) does not go on to
 # the home screen: after RETRY_SECONDS, calibration starts again from the
