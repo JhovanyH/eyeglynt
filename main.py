@@ -128,6 +128,32 @@ REPEAT_TIME = DWELL_TIME  # held keys repeat at the SAME rate as the initial dwe
 # still lands on the button at the edge (Clear, Space, Thank you, ...).
 EDGE_INSET = 20  # pixels
 
+# AUTOMATIC RE-CENTRING (drift correction). Right after calibrating, the
+# pointer lands about 1 cm from where the eyes look, but then it slowly
+# slides off as the head sinks or turns a little. In the saved logs (22
+# pairs of calibrations a few minutes apart, 11 November), the earlier
+# calibration missed the later test dots by 4.1 cm on average, against
+# 1.7 cm for a fresh one. That slide is mostly the same everywhere on
+# the screen: one shift for the whole screen took it down to 2.0 cm.
+# So the app keeps re-centring itself while it is used. Every selected
+# key tells where the pointer was while the user looked at it (its
+# average during the dwell, after DRIFT_SETTLE_TIME) and where the eyes
+# were (the key's middle). After each selection, the pointer is moved
+# DRIFT_LEARN_RATE of the way back towards the key's middle, so a slow
+# slide is undone, key after key, before it gets big enough to pick the
+# wrong key. Selecting Back or Backspace (UNDO_BUTTONS) shortly after
+# takes that last step back, since the key was probably the wrong one.
+# In a simulation of 80 selections with the pointer sliding 2 to 4 cm,
+# the right key was picked 53-79% of the time without this and about
+# 94% with it; without any slide it costs about 1% (94.8 -> 94.1%).
+DRIFT_CORRECTION = True
+DRIFT_LEARN_RATE = 0.3      # share of each key's miss that is corrected
+DRIFT_STEP_LIMIT_CM = 1.5   # one key's miss counts as at most this, each direction
+DRIFT_MAX_CM = 5.0          # the total correction never goes beyond this
+DRIFT_SETTLE_TIME = 1.0     # seconds: the start of each dwell is ignored (eyes still landing)
+UNDO_BUTTONS = ("Back", "Backspace")
+DRIFT_UNDO_SECONDS = 20     # Back/Backspace takes back a correction this recent
+
 # For testing only: draws a small yellow circle where the app thinks the
 # person is looking, so you can see how far off the tracking is. It is
 # off, also while testing: people tend to look at the circle instead of
@@ -354,6 +380,10 @@ class DwellButton(Button):
 
     progress = NumericProperty(0.0)  # 0.0 -> 1.0
 
+    # Called with the button at every dwell selection, before on_selected
+    # (set by GazeManager, for DRIFT_CORRECTION).
+    selection_listener = None
+
     def __init__(self, on_selected=None, dwell_time=None,
                  repeatable=False, repeat_time=None,
                  bg_color=None, border_color=None, text_color=None,
@@ -492,6 +522,10 @@ class DwellButton(Button):
         self._redraw()
         if self.progress >= 1.0:
             self.cancel_dwell()
+            # Tell the GazeManager first, while the button still has the
+            # text it was selected with (see DRIFT_CORRECTION).
+            if DwellButton.selection_listener is not None:
+                DwellButton.selection_listener(self)
             if self.on_selected:
                 self.on_selected(self)
             if self.repeatable:
@@ -571,6 +605,9 @@ class GazeManager:
 
     Buttons are "sticky" (see STICKY_MARGIN and LEAVE_DELAY), so a
     jittery pointer or a blink doesn't restart a dwell that is under way.
+
+    It also re-centres the gaze pointer after every selection (see
+    DRIFT_CORRECTION).
     """
 
     def __init__(self, screen_manager: ScreenManager, gaze_engine: GazeEngine = None):
@@ -580,7 +617,23 @@ class GazeManager:
         self._away_since = None  # when the pointer left the current button, or None
         self._blocked = None     # a new button the gaze must leave before it can be used
         self.pointer = None      # the test circle (SHOW_GAZE_POINTER), added in on_start
+        # Re-centring (see DRIFT_CORRECTION): the gaze pointer's positions
+        # (time, x, y) while dwelling on the current button, and the last
+        # step taken (x, y, time), so Back/Backspace can take it back.
+        self._dwell_points = []
+        self._dwell_start = None
+        self._last_step = None
+        DwellButton.selection_listener = self._on_selection
         Clock.schedule_interval(self._update, 1 / 30)
+
+    def _gaze_pos(self):
+        """Where the gaze pointer is, (x, y) in window pixels, before it is
+        kept on the screen; None unless gaze gives both directions (not
+        the mouse)."""
+        if self.gaze_engine is None:
+            return None
+        x, y = self.gaze_engine.get_screen_x(), self.gaze_engine.get_screen_y()
+        return None if x is None or y is None else (x, y)
 
     def get_pointer_pos(self):
         x, y = Window.mouse_pos  # start from the mouse...
@@ -596,11 +649,54 @@ class GazeManager:
         y = min(max(y, EDGE_INSET), Window.height - EDGE_INSET)
         return (x, y)
 
+    def _on_selection(self, btn):
+        """Runs at every dwell selection: re-centres the gaze pointer (see
+        DRIFT_CORRECTION). The pointer's average while the user looked at
+        the button, against the button's middle, is how far off it is."""
+        points = [(x, y) for t, x, y in self._dwell_points
+                  if self._dwell_start is not None and t - self._dwell_start >= DRIFT_SETTLE_TIME]
+        self._dwell_points = []
+        self._dwell_start = time.time()   # a repeating key starts its next dwell now
+        if (not DRIFT_CORRECTION or self.gaze_engine is None or btn is not self._current_target
+                or self.sm.current == "calibration"):
+            return
+        shift_x, shift_y = self.gaze_engine.get_pointer_shift()
+        if btn.text in UNDO_BUTTONS:
+            # The key before was probably the wrong one: take its step back.
+            if self._last_step is not None and time.time() - self._last_step[2] <= DRIFT_UNDO_SECONDS:
+                step_x, step_y, _ = self._last_step
+                self.gaze_engine.set_pointer_shift(shift_x - step_x, shift_y - step_y)
+                print(f"[Re-centring] {btn.text}: last step taken back")
+            self._last_step = None
+            return
+        # Too few gaze readings (no face, or the mouse was used): no step.
+        if len(points) < 10:
+            return
+        middle_x, middle_y = btn.to_window(*btn.center)
+        limit_x = DRIFT_STEP_LIMIT_CM * SCREEN_PX_PER_CM_X
+        limit_y = DRIFT_STEP_LIMIT_CM * SCREEN_PX_PER_CM_Y
+        miss_x = min(max(np.mean([x for x, y in points]) - middle_x, -limit_x), limit_x)
+        miss_y = min(max(np.mean([y for x, y in points]) - middle_y, -limit_y), limit_y)
+        max_x, max_y = DRIFT_MAX_CM * SCREEN_PX_PER_CM_X, DRIFT_MAX_CM * SCREEN_PX_PER_CM_Y
+        new_x = min(max(shift_x - DRIFT_LEARN_RATE * miss_x, -max_x), max_x)
+        new_y = min(max(shift_y - DRIFT_LEARN_RATE * miss_y, -max_y), max_y)
+        self.gaze_engine.set_pointer_shift(new_x, new_y)
+        self._last_step = (new_x - shift_x, new_y - shift_y, time.time())
+        # Kivy's y grows upwards: a positive miss_y means the pointer was too high.
+        print(f"[Re-centring] {btn.text or getattr(btn, 'icon', '') or 'button'}: pointer was "
+              f"{miss_x / SCREEN_PX_PER_CM_X:+.1f} cm right, {miss_y / SCREEN_PX_PER_CM_Y:+.1f} cm up; "
+              f"correction now {new_x / SCREEN_PX_PER_CM_X:+.1f} cm right, "
+              f"{new_y / SCREEN_PX_PER_CM_Y:+.1f} cm up")
+
     def _update(self, dt):
         active_screen = self.sm.current_screen
         if active_screen is None:
             return
         pos = self.get_pointer_pos()
+        if self._current_target is not None:
+            gaze = self._gaze_pos()
+            if gaze is not None:
+                self._dwell_points.append((time.time(), *gaze))
         if self.pointer is not None:
             # Hidden during calibration, where it would distract from the dots.
             self.pointer.move_to(pos, visible=active_screen.name != "calibration")
@@ -617,6 +713,7 @@ class GazeManager:
             current.cancel_dwell()
             self._current_target = current = None
             self._away_since = None
+            self._dwell_points, self._dwell_start = [], None
             self._blocked = self._button_at(buttons, pos)
         if self._blocked is not None:
             if self._blocked in buttons and self._is_near(self._blocked, pos, STICKY_MARGIN):
@@ -642,6 +739,7 @@ class GazeManager:
             if current is not None:
                 current.cancel_dwell()
             self._current_target = target
+            self._dwell_points, self._dwell_start = [], time.time()   # see _on_selection
             if target is not None:
                 target.start_dwell()
 
@@ -1328,15 +1426,27 @@ RESULT_SECONDS = 15             # how long the result stays on screen (to photog
 # lands: how far from the dot on average (accuracy) and how much it
 # shakes (precision), in centimetres on the screen. Every reading, from
 # calibration and from the test, is saved to a CSV file in the "logs"
-# folder, so the real measurements can be analysed later. Set
-# RUN_ACCURACY_TEST to False for the real user sessions.
+# folder, so the real measurements can be analysed later. The test dots
+# also make the calibration better (see TEST_DOTS_IN_CALIBRATION), so it
+# can stay on for the real user sessions too; set RUN_ACCURACY_TEST to
+# False only to make calibration about 20 seconds shorter.
 RUN_ACCURACY_TEST = True
+
+# USE THE TEST DOTS TOO. After the accuracy test, the calibration is fitted
+# again from all 15 dots (9 calibration + 6 test dots). The result shown
+# is still the 9-dot one, measured at dots the fits had not seen. Redone
+# with the 22 saved calibrations that had a test (11 November), more dots
+# put the pointer about 10% closer: each test dot, fitted with the 9
+# calibration dots and the 5 other test dots, was 1.49 cm off on average
+# instead of 1.66 cm (median 1.28 instead of 1.43), better in 17 of 22.
+TEST_DOTS_IN_CALIBRATION = True
 
 # The gaze engine's calibration, saved when the calibration screen opens
 # so "Stop calibration" on the caregiver dashboard can put it back.
 CALIBRATION_STATE = ("_x_points", "_y_points", "_shakes", "_x_fit", "_y_fit",
                      "_x_backup", "_y_backup", "_calib_face_sizes", "_calib_face_size",
-                     "_x_heads", "_y_heads", "_calib_head", "_centre_x", "_centre_y")
+                     "_x_heads", "_y_heads", "_calib_head", "_centre_x", "_centre_y",
+                     "_pointer_shift")
 ACCURACY_TEST_POINTS = [
     (0.25, 0.65), (0.50, 0.65), (0.75, 0.65),   # upper row, left to right
     (0.75, 0.30), (0.50, 0.30), (0.25, 0.30),   # lower row, right to left
@@ -1617,11 +1727,11 @@ class CalibrationScreen(Screen):
         self._log(elapsed, feature, pointer)
         if elapsed >= CALIBRATION_SETTLE_TIME:
             self._keep_eye_picture(elapsed)
-        if self.stage == "test":
-            if elapsed >= CALIBRATION_SETTLE_TIME:
-                self.pointer_samples.append(pointer)
+        if self.stage == "test" and elapsed >= CALIBRATION_SETTLE_TIME:
+            self.pointer_samples.append(pointer)
         # Ignore the first moment at each dot: the eyes are still moving there.
-        elif feature is not None and elapsed >= CALIBRATION_SETTLE_TIME:
+        # (The test dots' readings are kept too, see TEST_DOTS_IN_CALIBRATION.)
+        if feature is not None and elapsed >= CALIBRATION_SETTLE_TIME:
             fx, vy, iy, hx = feature
             self.samples.append(fx)
             self.samples_iy.append(iy)
@@ -1683,6 +1793,10 @@ class CalibrationScreen(Screen):
 
         if self.stage == "test":
             self.test_results.append((*self.current_target_px, self.pointer_samples))
+            # Stored now, but only used for the fits after the test's result
+            # is worked out (see TEST_DOTS_IN_CALIBRATION).
+            if TEST_DOTS_IN_CALIBRATION:
+                self._add_dot_to_calibration()
             self.target_index += 1
             if self.target_index < len(ACCURACY_TEST_POINTS):
                 self._show_current_target()
@@ -1690,30 +1804,35 @@ class CalibrationScreen(Screen):
                 self._finish_test()
             return
 
-        if self.samples:
-            avg_fx = sum(self.samples) / len(self.samples)
-            target_x, target_y = self.current_target_px
-            # The glint measurements are only recorded if a glint was seen
-            # for at least half of the readings at this dot; otherwise
-            # they're unreliable.
-            avg_vy = avg_hx = None
-            if len(self.samples_vy) >= len(self.samples) / 2:
-                avg_vy = sum(self.samples_vy) / len(self.samples_vy)
-            if len(self.samples_hx) >= len(self.samples) / 2:
-                avg_hx = sum(self.samples_hx) / len(self.samples_hx)
-            avg_iy = sum(self.samples_iy) / len(self.samples_iy)
-            # How much each measurement wobbled at this dot (standard
-            # deviation); the gaze engine uses it to choose its fits.
-            shakes = tuple(float(np.std(values)) if len(values) >= 2 else None
-                           for values in (self.samples, self.samples_vy, self.samples_iy, self.samples_hx))
-            self.gaze_engine.add_calibration_point(avg_fx, target_x, avg_vy, target_y, avg_iy, avg_hx,
-                                                   shakes=shakes)
-
+        self._add_dot_to_calibration()
         self.target_index += 1
         if self.target_index < len(CALIBRATION_POINTS):
             self._show_current_target()
         else:
             self._finish_calibration()
+
+    def _add_dot_to_calibration(self):
+        """Gives the gaze engine this dot's average readings (nothing if the
+        face wasn't seen here)."""
+        if not self.samples:
+            return
+        avg_fx = sum(self.samples) / len(self.samples)
+        target_x, target_y = self.current_target_px
+        # The glint measurements are only recorded if a glint was seen
+        # for at least half of the readings at this dot; otherwise
+        # they're unreliable.
+        avg_vy = avg_hx = None
+        if len(self.samples_vy) >= len(self.samples) / 2:
+            avg_vy = sum(self.samples_vy) / len(self.samples_vy)
+        if len(self.samples_hx) >= len(self.samples) / 2:
+            avg_hx = sum(self.samples_hx) / len(self.samples_hx)
+        avg_iy = sum(self.samples_iy) / len(self.samples_iy)
+        # How much each measurement wobbled at this dot (standard
+        # deviation); the gaze engine uses it to choose its fits.
+        shakes = tuple(float(np.std(values)) if len(values) >= 2 else None
+                       for values in (self.samples, self.samples_vy, self.samples_iy, self.samples_hx))
+        self.gaze_engine.add_calibration_point(avg_fx, target_x, avg_vy, target_y, avg_iy, avg_hx,
+                                               shakes=shakes)
 
     def _finish_calibration(self):
         try:
@@ -1761,6 +1880,7 @@ class CalibrationScreen(Screen):
             per_dot.append(f"{where}: {abs(dx):.1f} cm too far {'right' if dx > 0 else 'left'}, "
                            f"{abs(dy):.1f} cm too {'high' if dy > 0 else 'low'}, shaking {shake:.1f} cm")
         if not shakes:
+            self._learn_test_dots()
             self._show_result()   # no gaze pointer: the summary already says why
             return
         distance = float(np.mean(np.hypot(offsets_x, offsets_y)))
@@ -1775,7 +1895,35 @@ class CalibrationScreen(Screen):
         self.summary = self.summary.replace("Calibration done", f"Calibration done: {rating}", 1)
         self.summary += (f"\n{distance:.1f} cm off (left/right {np.mean(offsets_x):.1f}, "
                          f"up/down {np.mean(offsets_y):.1f}), shaking {shaking:.1f} cm")
+        self._learn_test_dots()
         self._show_result()
+
+    def _learn_test_dots(self):
+        """Fits the calibration again from all 15 dots, the 9 calibration
+        dots and the 6 test dots (see TEST_DOTS_IN_CALIBRATION). The
+        result on screen stays the one of the 9-dot fits, a fair test.
+        If the new fits are not possible, or lose the up/down direction
+        that the 9-dot fits had, the 9-dot fits are kept."""
+        if not TEST_DOTS_IN_CALIBRATION:
+            return
+        engine = self.gaze_engine
+        before = {name: getattr(engine, name) for name in CALIBRATION_STATE if hasattr(engine, name)}
+        had_vertical = engine.is_vertical_calibrated()
+        try:
+            fits = engine.fit_calibration()
+        except ValueError as e:
+            fits = None
+            print(f"[Calibration] with the test dots: {e}")
+        if fits is None or (had_vertical and not engine.is_vertical_calibrated()):
+            for name, value in before.items():
+                setattr(engine, name, value)
+            print("[Calibration] kept the fits from the 9 calibration dots")
+            return
+        print("[Calibration] with the 6 test dots too: " + fits.replace("\n", "; "))
+        if not had_vertical and engine.is_vertical_calibrated():
+            # The test dots rescued up/down: the summary's warning no longer holds.
+            self.summary = self.summary.replace(
+                "\nUp/down did not work and uses the mouse -- please calibrate again", "")
 
     def _show_result(self):
         self.dot.pos = (-100, -100)
