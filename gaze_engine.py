@@ -268,6 +268,14 @@ SMOOTHING_TIME = 0.4    # seconds
 # (see _Eye: where the pupil usually is, the gap between the glints).
 SMOOTHING_ALPHA = 0.25
 
+# LOW POWER, while the app shows its resting screen (main.py, REST_AFTER):
+# only this many camera pictures a second are processed, instead of as
+# many as the Pi can (about 9). MediaPipe takes most of the processor's
+# time, so this cuts the work, the heat and the power used to about a
+# third. The resting screen only needs the gaze for its one big Start
+# button, which still works at this rate.
+LOW_POWER_FPS = 3.0     # pictures a second
+
 # After calibration, each axis is only used if a straight line fits the
 # calibration points well. R squared (0 to 1) measures that fit: 1 means
 # the eye measurements line up perfectly with the dot positions, 0
@@ -1312,6 +1320,7 @@ class GazeEngine:
         self._slowdown = None     # why the Pi is slowing itself down, if it is (see _pi_health)
         self._focus_requested = FOCUS_ON_EYES  # True: focus the lens on the eyes (see FOCUS_ON_EYES)
         self._focusing = False    # True while that is being done
+        self._low_power = False   # True: process only LOW_POWER_FPS pictures a second
         self._lens = None         # the lens position it chose (dioptres), None until then
         self._eye_boxes = None    # boxes around the eyes in the latest picture with a face
         self._use_pupil = False   # see USE_PUPIL; set once the camera is known
@@ -1410,7 +1419,16 @@ class GazeEngine:
         fps_count, fps_start = 0, time.time()
         spent = {"camera": 0.0, "MediaPipe": 0.0, "eyes": 0.0}
         picture_number = 0
+        last_picture_at = 0.0
         while self._running:
+            if self._low_power:
+                # Resting (see LOW_POWER_FPS): wait until the next picture is
+                # due, a little at a time, so waking up is not delayed.
+                wait = last_picture_at + 1 / LOW_POWER_FPS - time.time()
+                if wait > 0:
+                    time.sleep(min(wait, 0.1))
+                    continue
+            last_picture_at = time.time()
             if self._focus_requested:
                 # Focusing on the eyes was asked for (see request_focus). It
                 # is done here, between two pictures, because the camera may
@@ -1437,7 +1455,8 @@ class GazeEngine:
                 health = f"; processor {temperature:.0f} °C" if temperature is not None else ""
                 if self._slowdown:
                     health += f"; THE PI IS SLOWED DOWN: {self._slowdown}"
-                print(f"[GazeEngine] {self._fps:.1f} pictures a second; per picture: {times}{health}")
+                resting = " (resting: low power)" if self._low_power else ""
+                print(f"[GazeEngine] {self._fps:.1f} pictures a second{resting}; per picture: {times}{health}")
                 fps_count, fps_start = 0, time.time()
                 spent = dict.fromkeys(spent, 0.0)
             # MediaPipe gets a smaller copy (every Nth pixel). It needs a
@@ -1613,6 +1632,11 @@ class GazeEngine:
     def get_fps(self):
         """Pictures processed per second, or None until it's measured."""
         return self._fps
+
+    def set_low_power(self, on):
+        """True: process only LOW_POWER_FPS pictures a second (the app's
+        resting screen); False: as many as possible again."""
+        self._low_power = bool(on)
 
     def request_focus(self):
         """Asks for the lens to be focused on the eyes (see FOCUS_ON_EYES).

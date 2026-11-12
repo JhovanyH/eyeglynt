@@ -2,7 +2,7 @@
 EyeGlynt - Icons
 ================
 Draws the small icons used in the Figure 29 design (keyboard, flame,
-speaker, erase, arrows, house) with Kivy's own drawing instructions.
+speaker, erase, arrows, house, moon) with Kivy's own drawing instructions.
 
 Why draw them instead of using image files:
   - no image assets to download, license, or keep in sync between the
@@ -169,6 +169,16 @@ def _home(group, p, side, color, bg):
     group.add(Rectangle(pos=(dx, dy), size=(0.18 * side, 0.24 * side)))
 
 
+def _moon(group, p, side, color, bg):
+    # A crescent: a full circle, with a circle in the button's colour
+    # drawn over its upper right.
+    x0, y0 = p(0.1, 0.1)
+    group.add(Ellipse(pos=(x0, y0), size=(0.8 * side, 0.8 * side)))
+    group.add(Color(*bg))
+    x1, y1 = p(0.32, 0.3)
+    group.add(Ellipse(pos=(x1, y1), size=(0.66 * side, 0.66 * side)))
+
+
 _ICONS = {
     "keyboard": _keyboard,
     "flame": _flame,
@@ -177,4 +187,5 @@ _ICONS = {
     "arrow_left": _arrow_left,
     "shift": _shift,
     "home": _home,
+    "moon": _moon,
 }
