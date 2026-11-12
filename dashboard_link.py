@@ -28,6 +28,8 @@ How main.py uses it:
     dashboard.take_commands()              the dashboard's button presses
     dashboard.recalibration_started() / recalibration_finished(ok)
     dashboard.recalibration_cancelled()    Stop calibration was pressed
+    dashboard.calibration_gave_up(tries)   calibration was poor `tries` times
+                                           in a row; the app went on anyway
     dashboard.stop()                       when the app closes: the
                                            dashboard then ends the session
 """
@@ -252,6 +254,22 @@ class DashboardLink:
                 db.raise_alert("recalibration_cancelled", "Calibration stopped from the dashboard",
                                severity="info")
         self._do(job)
+
+    def calibration_gave_up(self, tries):
+        """Calibration was poor `tries` times in a row and the app went on
+        anyway (see CALIBRATION_TRIES in main.py): tells the caregiver. A
+        recalibration asked for on the dashboard ends as failed, which
+        raises the "Recalibration failed" alert; otherwise a "Calibration
+        required" alert is raised. Both only while a session is running."""
+        if not self.enabled:
+            return
+        if self._recal_open:
+            self.recalibration_finished(False)
+            return
+        self._alert("calibration_required",
+                    f"Calibration was poor {tries} times in a row: check the user's position "
+                    "(about 40 cm from the camera) and the lighting, then press Recalibrate",
+                    severity="critical")
 
     # ---- background work ---------------------------------------------------
     def _do(self, job):
