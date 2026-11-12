@@ -1604,7 +1604,7 @@ FOCUS_WAIT_SECONDS = 10
 # 9 November the face was about 55 cm away.
 BEST_DISTANCE_CM = 40
 DISTANCE_TOLERANCE_CM = 7
-RESULT_SECONDS = 15             # how long the result stays on screen (to photograph it)
+RESULT_SECONDS = 10             # how long the result stays on screen (to photograph it)
 # CALIBRATING AGAIN. A result that says "please calibrate again" (Poor,
 # up/down did not work, or calibration did not work) does not go on to
 # the home screen: after RETRY_SECONDS, calibration starts again from the
@@ -1616,7 +1616,6 @@ RESULT_SECONDS = 15             # how long the result stays on screen (to photog
 # goes on after any result, as before 13 November 2026.
 CALIBRATION_TRIES = 3
 RETRY_SECONDS = 6
-GO_ON_SECONDS = 10   # how long the last poor result stays before going on
 
 # ACCURACY TEST (for testing, and for the results chapter). After
 # calibration, the red dot visits ACCURACY_TEST_POINTS, places between
@@ -2235,8 +2234,6 @@ class CalibrationScreen(Screen):
         if poor and CALIBRATION_TRIES > 1:
             print(f"[Calibration] poor {self._tries} times in a row: going on anyway, caregiver alerted")
             dashboard.calibration_gave_up(self._tries)
-            self._leave_after(GO_ON_SECONDS)
-            return
         self._leave_after(RESULT_SECONDS)  # long enough to read (or photograph) the result
 
     def _calibrate_again(self):
