@@ -144,6 +144,9 @@ EDGE_INSET = 20  # pixels
 # slide is undone, key after key, before it gets big enough to pick the
 # wrong key. Selecting Back or Backspace (UNDO_BUTTONS) shortly after
 # takes that last step back, since the key was probably the wrong one.
+# Back does this only right after a letter group or a Quick Fire
+# category was opened (DRIFT_PAGE_OPENERS): after a phrase is spoken,
+# Back just returns to the categories, and the phrase was the right one.
 # In a simulation of 80 selections with the pointer sliding 2 to 4 cm,
 # the right key was picked 53-79% of the time without this and about
 # 94% with it; without any slide it costs about 1% (94.8 -> 94.1%).
@@ -154,6 +157,7 @@ DRIFT_MAX_CM = 5.0          # the total correction never goes beyond this
 DRIFT_SETTLE_TIME = 1.0     # seconds: the start of each dwell is ignored (eyes still landing)
 UNDO_BUTTONS = ("Back", "Backspace")
 DRIFT_UNDO_SECONDS = 20     # Back/Backspace takes back a correction this recent
+DRIFT_PAGE_OPENERS = ("group", "category")   # button roles whose step Back takes back
 
 # For testing only: draws a small yellow circle where the app thinks the
 # person is looking, so you can see how far off the tracking is. It is
@@ -623,7 +627,8 @@ class GazeManager:
         self.pointer = None      # the test circle (SHOW_GAZE_POINTER), added in on_start
         # Re-centring (see DRIFT_CORRECTION): the gaze pointer's positions
         # (time, x, y) while dwelling on the current button, and the last
-        # step taken (x, y, time), so Back/Backspace can take it back.
+        # step taken (x, y, time, whether that button opened a page), so
+        # Back/Backspace can take it back.
         self._dwell_points = []
         self._dwell_start = None
         self._last_step = None
@@ -667,8 +672,12 @@ class GazeManager:
         shift_x, shift_y = self.gaze_engine.get_pointer_shift()
         if btn.text in UNDO_BUTTONS:
             # The key before was probably the wrong one: take its step back.
-            if self._last_step is not None and time.time() - self._last_step[2] <= DRIFT_UNDO_SECONDS:
-                step_x, step_y, _ = self._last_step
+            # Back means that only when the key before opened the page Back
+            # leaves (a letter group or a category), not after a phrase.
+            last = self._last_step
+            if (last is not None and time.time() - last[2] <= DRIFT_UNDO_SECONDS
+                    and (btn.text != "Back" or last[3])):
+                step_x, step_y = last[0], last[1]
                 self.gaze_engine.set_pointer_shift(shift_x - step_x, shift_y - step_y)
                 print(f"[Re-centring] {btn.text}: last step taken back")
             self._last_step = None
@@ -685,7 +694,8 @@ class GazeManager:
         new_x = min(max(shift_x - DRIFT_LEARN_RATE * miss_x, -max_x), max_x)
         new_y = min(max(shift_y - DRIFT_LEARN_RATE * miss_y, -max_y), max_y)
         self.gaze_engine.set_pointer_shift(new_x, new_y)
-        self._last_step = (new_x - shift_x, new_y - shift_y, time.time())
+        self._last_step = (new_x - shift_x, new_y - shift_y, time.time(),
+                           getattr(btn, "role", None) in DRIFT_PAGE_OPENERS)
         # Kivy's y grows upwards: a positive miss_y means the pointer was too high.
         print(f"[Re-centring] {btn.text or getattr(btn, 'icon', '') or 'button'}: pointer was "
               f"{miss_x / SCREEN_PX_PER_CM_X:+.1f} cm right, {miss_y / SCREEN_PX_PER_CM_Y:+.1f} cm up; "
@@ -1330,6 +1340,7 @@ class QuickFireScreen(AppScreen):
                                image=CATEGORY_PICTURES.get(name), icon_layout="top",
                                on_selected=self._on_category)
             tile.key_value = name
+            tile.role = "category"   # opens a page (see DRIFT_PAGE_OPENERS)
             grid.add_widget(tile)
         self._show_grid(grid)
 
