@@ -1358,6 +1358,9 @@ class GazeEngine:
         # after the fits, (x, y) in screen pixels. Back to (0, 0) at every
         # new calibration.
         self._pointer_shift = (0.0, 0.0)
+        # How far off up/down was in main.py's accuracy test (cm), or None
+        # if there was no test. main.py uses it to choose Row mode.
+        self.updown_error_cm = None
 
     # ---- lifecycle ---------------------------------------------------
     def start(self):
@@ -1754,6 +1757,7 @@ class GazeEngine:
         self._y_heads = []
         self._calib_head = None
         self._pointer_shift = (0.0, 0.0)
+        self.updown_error_cm = None
 
     def get_pointer_shift(self):
         """How far the pointer is being moved after the fits, (x, y) in

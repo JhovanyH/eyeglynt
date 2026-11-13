@@ -153,6 +153,18 @@ def _arrow_left(group, p, side, color, bg):
     group.add(Rectangle(pos=(x0, y0), size=(0.52 * side, 0.28 * side)))
 
 
+def _arrow_up(group, p, side, color, bg):
+    group.add(Triangle(points=[*p(0.5, 0.94), *p(0.16, 0.56), *p(0.84, 0.56)]))
+    x0, y0 = p(0.36, 0.06)
+    group.add(Rectangle(pos=(x0, y0), size=(0.28 * side, 0.52 * side)))
+
+
+def _arrow_down(group, p, side, color, bg):
+    group.add(Triangle(points=[*p(0.5, 0.06), *p(0.16, 0.44), *p(0.84, 0.44)]))
+    x0, y0 = p(0.36, 0.42)
+    group.add(Rectangle(pos=(x0, y0), size=(0.28 * side, 0.52 * side)))
+
+
 def _shift(group, p, side, color, bg):
     group.add(Triangle(points=[*p(0.5, 0.92), *p(0.1, 0.5), *p(0.9, 0.5)]))
     x0, y0 = p(0.31, 0.1)
@@ -185,6 +197,8 @@ _ICONS = {
     "speak": _speak,
     "erase": _erase,
     "arrow_left": _arrow_left,
+    "arrow_up": _arrow_up,
+    "arrow_down": _arrow_down,
     "shift": _shift,
     "home": _home,
     "moon": _moon,

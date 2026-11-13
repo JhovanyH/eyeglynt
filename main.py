@@ -188,6 +188,26 @@ UNDO_BUTTONS = ("Back", "Backspace")
 DRIFT_UNDO_SECONDS = 20     # Back/Backspace takes back a correction this recent
 DRIFT_PAGE_OPENERS = ("group", "category")   # button roles whose step Back takes back
 
+# ROW MODE, for users whose up/down does not calibrate (two stroke
+# patients on 13 November 2026 ended with Poor calibrations). Without it,
+# up/down would then follow the mouse, which such a user can't move. In
+# Row mode only left/right is used. One row of buttons is highlighted at
+# a time and the eyes are taken to be on that row, so a button is picked
+# by looking left or right along it. Two tall strips at the screen's
+# edges move the highlight: "Row up" on the left, "Row down" on the
+# right. The edges are the easiest places to look at, because the
+# pointer stops there (see EDGE_INSET). After a page change (a letter
+# group, a category), the first row under the top bar is highlighted.
+# ROW_MODE: "auto" = on when up/down did not calibrate, or when the
+# accuracy test found up/down more than ROW_MODE_UPDOWN_CM off; "on" =
+# always (for testing); "off" = never (up/down follows the mouse).
+ROW_MODE = "auto"
+ROW_MODE_UPDOWN_CM = 2.0
+ROW_STRIP_WIDTH = 0.1             # each strip's share of the screen's width
+ROW_STRIP_ROLES = ("row_up", "row_down")
+ROW_HIGHLIGHT = rgb(255, 214, 0)  # the outline around the row in use
+ROW_DIM = (0, 0, 0, 0.45)         # drawn over the other rows
+
 # For testing only: draws a small yellow circle where the app thinks the
 # person is looking, so you can see how far off the tracking is. It is
 # off, also while testing: people tend to look at the circle instead of
@@ -635,6 +655,39 @@ def _find_dwell_buttons(widget):
     return found
 
 
+def row_mode_wanted(gaze_engine):
+    """True if Row mode should be on (see ROW_MODE)."""
+    if ROW_MODE == "on":
+        return True
+    if ROW_MODE != "auto" or gaze_engine is None or not gaze_engine.is_calibrated():
+        return False   # "off", or no gaze at all (the mouse is used)
+    if not gaze_engine.is_vertical_calibrated():
+        return True
+    error = getattr(gaze_engine, "updown_error_cm", None)
+    return error is not None and error > ROW_MODE_UPDOWN_CM
+
+
+def _group_rows(buttons):
+    """Groups buttons into rows: lists [left, bottom, right, top] in
+    window pixels, the top row first. A button whose middle lies within
+    the height of the row above it belongs to that row."""
+    boxes = []
+    for btn in buttons:
+        left, bottom = btn.to_window(btn.x, btn.y)
+        right, top = btn.to_window(btn.right, btn.top)
+        boxes.append((left, bottom, right, top))
+    boxes.sort(key=lambda box: -(box[1] + box[3]) / 2)
+    rows = []
+    for left, bottom, right, top in boxes:
+        middle = (bottom + top) / 2
+        if rows and rows[-1][1] <= middle <= rows[-1][3]:
+            row = rows[-1]
+            rows[-1] = [min(row[0], left), min(row[1], bottom), max(row[2], right), max(row[3], top)]
+        else:
+            rows.append([left, bottom, right, top])
+    return rows
+
+
 # ---------------------------------------------------------------------------
 # 2b. CAREGIVER DASHBOARD -- see dashboard_link.py
 # ---------------------------------------------------------------------------
@@ -710,6 +763,12 @@ class GazeManager:
         self._dwell_points = []
         self._dwell_start = None
         self._last_step = None
+        # Row mode (see ROW_MODE): the rows of the screen on display, the
+        # one in use, and what told the page apart (to notice a new page).
+        self.row_mode = False
+        self.on_row_mode = None     # called with True/False when Row mode turns on/off
+        self.row_overlay = None     # the highlight (RowOverlay), added in on_start
+        self._rows, self._row_index, self._rows_page = [], 0, None
         DwellButton.selection_listener = self._on_selection
         Clock.schedule_interval(self._update, 1 / GAZE_CHECK_RATE)
 
@@ -720,7 +779,43 @@ class GazeManager:
         if self.gaze_engine is None:
             return None
         x, y = self.gaze_engine.get_screen_x(), self.gaze_engine.get_screen_y()
+        if self.row_mode:
+            y = self._row_y()   # Row mode: up/down is the highlighted row
         return None if x is None or y is None else (x, y)
+
+    def _row_y(self):
+        """The middle of the highlighted row (Row mode), or None."""
+        if not self._rows:
+            return None
+        row = self._rows[self._row_index]
+        return (row[1] + row[3]) / 2
+
+    def move_row(self, step):
+        """Row up (step -1) or Row down (+1), going round at the ends."""
+        if self._rows:
+            self._row_index = (self._row_index + step) % len(self._rows)
+            self._draw_rows()
+
+    def _update_rows(self, screen, buttons):
+        """Finds the rows of the screen on display (Row mode only)."""
+        if not self.row_mode or screen.name == "calibration":
+            self._rows = []
+        else:
+            in_rows = [btn for btn in buttons if getattr(btn, "role", None) not in ROW_STRIP_ROLES]
+            rows = _group_rows(in_rows)
+            page = (screen.name, tuple(sorted(id(btn) for btn in in_rows)))
+            if page != self._rows_page:
+                # A new screen or page: start on the first row under the top bar.
+                self._rows_page = page
+                self._row_index = 1 if len(rows) > 1 else 0
+            self._row_index = min(self._row_index, max(len(rows) - 1, 0))
+            self._rows = rows
+        self._draw_rows()
+
+    def _draw_rows(self):
+        if self.row_overlay is not None:
+            show = self._rows if len(self._rows) > 1 else []
+            self.row_overlay.show(show, self._row_index)
 
     def get_pointer_pos(self):
         x, y = Window.mouse_pos  # start from the mouse...
@@ -731,6 +826,8 @@ class GazeManager:
                 x = gaze_x  # ...and replace each direction gaze can provide
             if gaze_y is not None:
                 y = gaze_y
+        if self.row_mode and self._rows:
+            y = self._row_y()   # Row mode: up/down is the highlighted row (see ROW_MODE)
         # Keep the pointer on the screen (see EDGE_INSET).
         x = min(max(x, EDGE_INSET), Window.width - EDGE_INSET)
         y = min(max(y, EDGE_INSET), Window.height - EDGE_INSET)
@@ -748,7 +845,8 @@ class GazeManager:
         self._dwell_points = []
         self._dwell_start = time.time()   # a repeating key starts its next dwell now
         if (not DRIFT_CORRECTION or self.gaze_engine is None or btn is not self._current_target
-                or self.sm.current == "calibration"):
+                or self.sm.current == "calibration"
+                or getattr(btn, "role", None) in ROW_STRIP_ROLES):   # at the edge: no middle to aim at
             return
         shift_x, shift_y = self.gaze_engine.get_pointer_shift()
         if btn.text in UNDO_BUTTONS:
@@ -771,6 +869,8 @@ class GazeManager:
         limit_y = DRIFT_STEP_LIMIT_CM * SCREEN_PX_PER_CM_Y
         miss_x = min(max(np.mean([x for x, y in points]) - middle_x, -limit_x), limit_x)
         miss_y = min(max(np.mean([y for x, y in points]) - middle_y, -limit_y), limit_y)
+        if self.row_mode:
+            miss_y = 0   # up/down is not measured in Row mode
         max_x, max_y = DRIFT_MAX_CM * SCREEN_PX_PER_CM_X, DRIFT_MAX_CM * SCREEN_PX_PER_CM_Y
         new_x = min(max(shift_x - DRIFT_LEARN_RATE * miss_x, -max_x), max_x)
         new_y = min(max(shift_y - DRIFT_LEARN_RATE * miss_y, -max_y), max_y)
@@ -787,6 +887,16 @@ class GazeManager:
         active_screen = self.sm.current_screen
         if active_screen is None:
             return
+        wanted = row_mode_wanted(self.gaze_engine)
+        if wanted != self.row_mode:
+            self.row_mode = wanted
+            self._rows_page = None
+            print(f"[Row mode] {'on: up/down is not used, pick rows with Row up/Row down' if wanted else 'off'}")
+            if self.on_row_mode is not None:
+                self.on_row_mode(wanted)
+        buttons = [btn for btn in _find_dwell_buttons(active_screen)
+                   if not btn.disabled and btn.selectable]  # greyed-out/display-only can't be selected
+        self._update_rows(active_screen, buttons)
         pos = self.get_pointer_pos()
         if self._current_target is not None:
             gaze = self._gaze_pos()
@@ -795,8 +905,6 @@ class GazeManager:
         if self.pointer is not None:
             # Hidden during calibration, where it would distract from the dots.
             self.pointer.move_to(pos, visible=active_screen.name != "calibration")
-        buttons = [btn for btn in _find_dwell_buttons(active_screen)
-                   if not btn.disabled and btn.selectable]  # greyed-out/display-only can't be selected
         current = self._current_target
 
         # A new page has just replaced the button that was selected (for
@@ -902,6 +1010,38 @@ class GazePointer(Widget):
         self._circle.circle = (pos[0], pos[1], self.RADIUS)
 
 
+class RowOverlay(Widget):
+    """Row mode (see ROW_MODE): a yellow outline around the row in use,
+    and the other rows dimmed. Redrawn only when something changes."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._group = InstructionGroup()
+        self.canvas.add(self._group)
+        self._shown = None
+
+    def show(self, rows, index):
+        key = (tuple(tuple(round(v) for v in row) for row in rows), index)
+        if key == self._shown:
+            return
+        self._shown = key
+        self._group.clear()
+        if rows:
+            # Dim everything between the strips above and below the row in
+            # use (also what can't be selected, such as the message box).
+            area_left, area_right = min(r[0] for r in rows), max(r[2] for r in rows)
+            area_bottom, area_top = min(r[1] for r in rows), max(r[3] for r in rows)
+            left, bottom, right, top = rows[index]
+            self._group.add(Color(*ROW_DIM))
+            self._group.add(Rectangle(pos=(area_left, top + 6),
+                                      size=(area_right - area_left, max(area_top - top - 6, 0))))
+            self._group.add(Rectangle(pos=(area_left, area_bottom),
+                                      size=(area_right - area_left, max(bottom - 6 - area_bottom, 0))))
+            self._group.add(Color(*ROW_HIGHLIGHT))
+            self._group.add(Line(rectangle=(left - 6, bottom - 6, right - left + 12, top - bottom + 12),
+                                 width=4))
+
+
 # ---------------------------------------------------------------------------
 # 3b. NAVIGATION -- the KEYBOARD and QUICK FIRES tabs
 # ---------------------------------------------------------------------------
@@ -999,6 +1139,11 @@ class AppScreen(Screen):
         self.nav = navigator
 
     def build_frame(self, controls, content):
+        # The whole screen: [Row up strip] frame [Row down strip]. The
+        # strips are only there in Row mode (see set_row_mode).
+        self._outer = Panel(bg_color=FRAME_BG, radius=0, orientation="horizontal")
+        self._strips = [self._row_strip("Row up", "arrow_up", "row_up", -1),
+                        self._row_strip("Row down", "arrow_down", "row_down", +1)]
         frame = Panel(bg_color=FRAME_BG, radius=0, orientation="vertical", padding=10, spacing=10)
         top_bar = BoxLayout(orientation="horizontal", spacing=10, size_hint_y=TOP_BAR_HEIGHT)
         top_bar.add_widget(self._tab("KEYBOARD", "keyboard", "keyboard", PURPLE))
@@ -1008,7 +1153,38 @@ class AppScreen(Screen):
         frame.add_widget(top_bar)
         content.size_hint_y = 1 - TOP_BAR_HEIGHT
         frame.add_widget(content)
-        self.add_widget(frame)
+        self._outer.add_widget(frame)
+        self.add_widget(self._outer)
+
+    def _row_strip(self, text, icon, role, step):
+        """A tall Row up / Row down strip (see ROW_MODE). Keeping the eyes
+        on it keeps moving the highlight, one row per dwell."""
+        box = BoxLayout(size_hint_x=ROW_STRIP_WIDTH, padding=[10, 10, 0, 10] if step < 0 else [0, 10, 10, 10])
+        btn = DwellButton(text=text, bold=True, font_size=26, icon=icon, icon_layout="top",
+                          bg_color=KEY_FACE, text_color=WHITE, radius=12, repeatable=True,
+                          on_selected=lambda b: self._on_row_step(b, step))
+        btn.role = role
+        box.add_widget(btn)
+        return box
+
+    def set_row_mode(self, on):
+        """Shows the Row up / Row down strips (Row mode) or hides them."""
+        up, down = self._strips
+        if on and up.parent is None:
+            for box in self._strips:
+                # The dwell time may have changed while they were hidden (see set_dwell_time).
+                btn = box.children[0]
+                btn.dwell_time = btn.repeat_time = REPEAT_TIME
+            self._outer.add_widget(up, index=len(self._outer.children))   # leftmost
+            self._outer.add_widget(down)                                   # rightmost
+        elif not on and up.parent is not None:
+            self._outer.remove_widget(up)
+            self._outer.remove_widget(down)
+
+    def _on_row_step(self, btn, step):
+        tell_dashboard(btn, self.TAB, "control", btn.role.replace("_", ":"), btn.text,
+                       navigation=True)
+        App.get_running_app().gaze_manager.move_row(step)
 
     def _tab(self, text, icon, screen_name, color):
         """One of the two tabs. The tab of the screen on display gets a
@@ -1616,6 +1792,10 @@ RESULT_SECONDS = 10             # how long the result stays on screen (to photog
 # goes on after any result, as before 13 November 2026.
 CALIBRATION_TRIES = 3
 RETRY_SECONDS = 6
+# The result's line when up/down did not calibrate (see ROW_MODE).
+UPDOWN_FAILED_LINE = ("\nUp/down did not work and uses the mouse -- please calibrate again"
+                      if ROW_MODE == "off" else
+                      "\nUp/down did not work (Row mode will be used) -- please calibrate again")
 
 # ACCURACY TEST (for testing, and for the results chapter). After
 # calibration, the red dot visits ACCURACY_TEST_POINTS, places between
@@ -1643,7 +1823,7 @@ TEST_DOTS_IN_CALIBRATION = True
 CALIBRATION_STATE = ("_x_points", "_y_points", "_shakes", "_x_fit", "_y_fit",
                      "_x_backup", "_y_backup", "_calib_face_sizes", "_calib_face_size",
                      "_x_heads", "_y_heads", "_calib_head", "_centre_x", "_centre_y",
-                     "_pointer_shift")
+                     "_pointer_shift", "updown_error_cm")
 ACCURACY_TEST_POINTS = [
     (0.25, 0.65), (0.50, 0.65), (0.75, 0.65),   # upper row, left to right
     (0.75, 0.30), (0.50, 0.30), (0.25, 0.30),   # lower row, right to left
@@ -2109,7 +2289,7 @@ class CalibrationScreen(Screen):
         print("[Calibration] " + fits.replace("\n", "; "))   # the fits, for testing
         self.summary = "Calibration done"
         if not self.gaze_engine.is_vertical_calibrated():
-            self.summary += "\nUp/down did not work and uses the mouse -- please calibrate again"
+            self.summary += UPDOWN_FAILED_LINE
         if RUN_ACCURACY_TEST:
             self.stage = "test"
             self.target_index = 0
@@ -2146,6 +2326,8 @@ class CalibrationScreen(Screen):
             self._show_result()   # no gaze pointer: the summary already says why
             return
         distance = float(np.mean(np.hypot(offsets_x, offsets_y)))
+        # Kept for Row mode (see ROW_MODE_UPDOWN_CM).
+        self.gaze_engine.updown_error_cm = float(np.mean(offsets_y))
         shaking = float(np.mean(shakes))
         # The details, for testing, in the terminal (see GOOD_CM).
         print("[Accuracy test] " + "\n[Accuracy test] ".join(per_dot))
@@ -2184,8 +2366,7 @@ class CalibrationScreen(Screen):
         print("[Calibration] with the 6 test dots too: " + fits.replace("\n", "; "))
         if not had_vertical and engine.is_vertical_calibrated():
             # The test dots rescued up/down: the summary's warning no longer holds.
-            self.summary = self.summary.replace(
-                "\nUp/down did not work and uses the mouse -- please calibrate again", "")
+            self.summary = self.summary.replace(UPDOWN_FAILED_LINE, "")
 
     def _show_result(self):
         self.dot.pos = (-100, -100)
@@ -2220,9 +2401,12 @@ class CalibrationScreen(Screen):
         if again:
             lines.append(f"[b]Calibrating again in {RETRY_SECONDS} seconds "
                          f"(try {self._tries + 1} of {CALIBRATION_TRIES})[/b]")
-        elif poor and CALIBRATION_TRIES > 1:
-            lines.append(f"[b][color={_hex(AMBER_TEXT)}]Poor {self._tries} times in a row, so EyeGlynt "
-                         f"goes on anyway. Recalibrate from the dashboard.[/color][/b]")
+        else:
+            if "Up/down did not work" not in self.summary and row_mode_wanted(self.gaze_engine):
+                lines.append(f"Up/down is more than {ROW_MODE_UPDOWN_CM:g} cm off, so Row mode will be used")
+            if poor and CALIBRATION_TRIES > 1:
+                lines.append(f"[b][color={_hex(AMBER_TEXT)}]Poor {self._tries} times in a row, so EyeGlynt "
+                             f"goes on anyway. Recalibrate from the dashboard.[/color][/b]")
         if details:
             lines.append(f"[size={RESULT_DETAILS_SIZE}]({escape_markup(details)})[/size]")
         self.instruction_label.text = "\n".join(lines)
@@ -2366,6 +2550,7 @@ class EyeGlyntApp(App):
         # for everything else, with automatic fallback to full mouse
         # control if calibration didn't complete.
         self.gaze_manager = GazeManager(sm, gaze_engine=self.gaze_engine)
+        self.gaze_manager.on_row_mode = self._on_row_mode
         Clock.schedule_interval(self._check_dashboard, 0.1)
         # Resting by itself (see REST_AFTER): the time counts from the last
         # selection, or from when the screen came up if that is later.
@@ -2386,6 +2571,11 @@ class EyeGlyntApp(App):
         if idle >= REST_AFTER:
             print(f"[Rest] No selection for {REST_AFTER:.0f} s: resting")
             self.navigator.go("rest")
+
+    def _on_row_mode(self, on):
+        """Row mode turned on or off (see ROW_MODE): the strips appear or go."""
+        for name in ("keyboard", "quickfire"):
+            self.sm.get_screen(name).set_row_mode(on)
 
     def _calibration_done(self):
         # A recalibration asked for on the dashboard counts as successful if
@@ -2425,6 +2615,9 @@ class EyeGlyntApp(App):
         # Open maximized, filling the screen but keeping the title bar, so
         # the window can still be closed or moved normally.
         Window.maximize()
+        # Row mode's highlight (see ROW_MODE), over the screens.
+        self.gaze_manager.row_overlay = RowOverlay()
+        Window.add_widget(self.gaze_manager.row_overlay)
         if SHOW_GAZE_POINTER:
             # Added to the window after the screens, so it is drawn on top.
             self.gaze_manager.pointer = GazePointer()
