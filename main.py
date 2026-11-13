@@ -220,6 +220,19 @@ ROW_DIM = (0, 0, 0, 0.45)         # drawn over the other rows
 TOUCH_SELECT = True
 TAP_MARK = " (tap)"
 
+# FREEZE WHEN THE EYES ARE LOST. Once calibrated, when the gaze gives no
+# position (no face seen, or the eyes not seen for longer than
+# IRIS_HOLD_TIME in gaze_engine.py: the user turned away, closed their
+# eyes or left the camera view), nothing fills up and nothing is picked
+# until the eyes are seen again; a button being filled starts again from
+# empty. Before, the pointer then fell back to the mouse, which stays
+# where a finger last touched the screen, so the button there could be
+# picked by accident (and a repeating key like Backspace kept repeating),
+# and that kept the app from resting (see REST_AFTER). Taps still work
+# (see TOUCH_SELECT), and without a calibration or a camera the mouse
+# still moves the pointer. Added on 13 November 2026.
+FREEZE_WHEN_GAZE_LOST = True
+
 # For testing only: draws a small yellow circle where the app thinks the
 # person is looking, so you can see how far off the tracking is. It is
 # off, also while testing: people tend to look at the circle instead of
@@ -787,6 +800,7 @@ class GazeManager:
         self._away_since = None  # when the pointer left the current button, or None
         self._blocked = None     # a new button the gaze must leave before it can be used
         self._after_tap = False   # a tap was the last selection (see _on_tap)
+        self._frozen = False      # the eyes are lost (see FREEZE_WHEN_GAZE_LOST)
         # What was selected last and when, and whether its dwell was
         # started by NEW_KEY_PAUSE (then the next key can't be).
         self._selected, self._selected_at = None, 0.0
@@ -819,6 +833,13 @@ class GazeManager:
         if self.row_mode:
             y = self._row_y()   # Row mode: up/down is the highlighted row
         return None if x is None or y is None else (x, y)
+
+    def gaze_lost(self):
+        """True when the gaze should move the pointer (calibrated) but gives
+        no position now: the eyes are not seen (see FREEZE_WHEN_GAZE_LOST)."""
+        engine = self.gaze_engine
+        return (FREEZE_WHEN_GAZE_LOST and engine is not None and engine.is_calibrated()
+                and engine.get_screen_x() is None)
 
     def _row_y(self):
         """The middle of the highlighted row (Row mode), or None."""
@@ -955,6 +976,22 @@ class GazeManager:
                    if not btn.disabled and btn.selectable]  # greyed-out/display-only can't be selected
         self._update_rows(active_screen, buttons)
         pos = self.get_pointer_pos()
+        if self.gaze_lost():
+            # The eyes are not seen: nothing fills up or is picked until
+            # they are back, and then the dwell starts from empty.
+            if self._current_target is not None:
+                self._current_target.cancel_dwell()
+            self._current_target, self._away_since, self._blocked = None, None, None
+            self._dwell_points, self._dwell_start = [], None
+            if self.pointer is not None:
+                self.pointer.move_to(pos, visible=False)
+            if not self._frozen:
+                self._frozen = True
+                print("[Gaze] eyes not seen: nothing is selected until they are seen again")
+            return
+        if self._frozen:
+            self._frozen = False
+            print("[Gaze] eyes seen again")
         if self._current_target is not None:
             gaze = self._gaze_pos()
             if gaze is not None:
