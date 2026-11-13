@@ -208,6 +208,18 @@ ROW_STRIP_ROLES = ("row_up", "row_down")
 ROW_HIGHLIGHT = rgb(255, 214, 0)  # the outline around the row in use
 ROW_DIM = (0, 0, 0, 0.45)         # drawn over the other rows
 
+# TAP AS A BACKUP. With TOUCH_SELECT, tapping (or clicking) any button
+# picks it at once, whatever the calibration result, so a caregiver, or a
+# patient who can still use a hand, can go on when the gaze doesn't work.
+# The button is then not picked again by dwell while the pointer stays on
+# it. A tapped pick is marked in the dashboard's Activity Log with
+# " (tap)" after its text, a dwell of 0 and no gaze point, so it can be
+# left out of the gaze accuracy results. Set it to False on test days, so
+# only the gaze can pick (the Start Calibration button still works by
+# tap). Added on 13 November 2026, after the tests with stroke patients.
+TOUCH_SELECT = True
+TAP_MARK = " (tap)"
+
 # For testing only: draws a small yellow circle where the app thinks the
 # person is looking, so you can see how far off the tracking is. It is
 # off, also while testing: people tend to look at the circle instead of
@@ -462,6 +474,9 @@ class DwellButton(Button):
     # Called with the button at every dwell selection, before on_selected
     # (set by GazeManager, for DRIFT_CORRECTION).
     selection_listener = None
+    # Called with the button when it is tapped, before on_selected (set by
+    # GazeManager, see TOUCH_SELECT).
+    tap_listener = None
 
     def __init__(self, on_selected=None, dwell_time=None,
                  repeatable=False, repeat_time=None,
@@ -476,6 +491,7 @@ class DwellButton(Button):
         self.repeat_time = repeat_time if repeat_time is not None else REPEAT_TIME
         self._active_dwell_time = self.dwell_time
         self._event = None
+        self.tapped = False   # True while on_selected runs for a tap (see TOUCH_SELECT)
 
         self.selectable = selectable  # False: shown normally, but gaze ignores it
         self.bg_color = bg_color
@@ -580,6 +596,21 @@ class DwellButton(Button):
             self._progress_group.add(
                 RoundedRectangle(pos=self.pos, size=(pw, h), radius=[min(r, pw / 2)])
             )
+
+    # -- tapping (see TOUCH_SELECT) ------------------------------------------
+    def on_release(self):
+        """A tap or click on the button: picks it at once (see TOUCH_SELECT).
+        Kivy calls this when a finger or the mouse lets go of the button."""
+        if not TOUCH_SELECT or not self.selectable or self.disabled or self.on_selected is None:
+            return
+        self.cancel_dwell()
+        if DwellButton.tap_listener is not None:
+            DwellButton.tap_listener(self)
+        self.tapped = True
+        try:
+            self.on_selected(self)
+        finally:
+            self.tapped = False
 
     # -- dwell timing (unchanged logic) -----------------------------------
     @property
@@ -698,6 +729,10 @@ def tell_dashboard(btn, interface, kind, element_id, text, category=None, naviga
     "phrase", "speak" or "control"; navigation=True for a selection that
     only moves around the screens (see NAVIGATION_ONLY_IN_FREE_LOOK in
     dashboard_link.py)."""
+    if getattr(btn, "tapped", False):   # picked by a tap, not by gaze (see TOUCH_SELECT)
+        dashboard.selection(interface, kind, element_id, text + TAP_MARK, category=category,
+                            dwell_s=0.0, pointer=None, navigation=navigation)
+        return
     pointer = None
     gaze_manager = getattr(App.get_running_app(), "gaze_manager", None)
     if gaze_manager is not None:
@@ -751,6 +786,7 @@ class GazeManager:
         self._current_target = None
         self._away_since = None  # when the pointer left the current button, or None
         self._blocked = None     # a new button the gaze must leave before it can be used
+        self._after_tap = False   # a tap was the last selection (see _on_tap)
         # What was selected last and when, and whether its dwell was
         # started by NEW_KEY_PAUSE (then the next key can't be).
         self._selected, self._selected_at = None, 0.0
@@ -770,6 +806,7 @@ class GazeManager:
         self.row_overlay = None     # the highlight (RowOverlay), added in on_start
         self._rows, self._row_index, self._rows_page = [], 0, None
         DwellButton.selection_listener = self._on_selection
+        DwellButton.tap_listener = self._on_tap
         Clock.schedule_interval(self._update, 1 / GAZE_CHECK_RATE)
 
     def _gaze_pos(self):
@@ -832,6 +869,26 @@ class GazeManager:
         x = min(max(x, EDGE_INSET), Window.width - EDGE_INSET)
         y = min(max(y, EDGE_INSET), Window.height - EDGE_INSET)
         return (x, y)
+
+    def _on_tap(self, btn):
+        """Runs when a button is tapped (see TOUCH_SELECT), before it acts.
+        The tap counts as a selection: the button is not picked again by
+        dwell while the pointer stays on it (with the mouse, the pointer
+        jumps to where the finger touched), as after a dwell selection. No
+        re-centring: the pointer was not where the user looked."""
+        if self._current_target is not None:
+            self._current_target.cancel_dwell()
+        # Like a dwell selection: the button stays the target, and if a new
+        # page replaces it, the button that appears under the pointer is
+        # ignored until the pointer leaves it. Unlike after a dwell, that
+        # holds for any key (no NEW_KEY_PAUSE restart): with the mouse, the
+        # pointer stays where the finger let go until the next touch.
+        self._current_target, self._away_since, self._blocked = btn, None, None
+        self._dwell_points, self._dwell_start = [], None
+        self._selected, self._selected_at = self._key_of(btn), time.time()
+        self._after_paused_start = False
+        self._paused_start = None
+        self._after_tap = True
 
     def _on_selection(self, btn):
         """Runs at every dwell selection: re-centres the gaze pointer (see
@@ -927,6 +984,7 @@ class GazeManager:
                     self._start_paused_dwell(self._current_target)
                 return
             self._blocked = None
+            self._after_tap = False   # the pointer left: back to normal
 
         # Sticky buttons (see STICKY_MARGIN and LEAVE_DELAY): keep dwelling
         # on the current button while the pointer is near it...
@@ -950,6 +1008,7 @@ class GazeManager:
         if target is not current:
             if current is not None:
                 current.cancel_dwell()
+            self._after_tap = False   # the pointer moved on: back to normal
             self._current_target = target
             self._dwell_points, self._dwell_start = [], time.time()   # see _on_selection
             if target is not None:
@@ -968,7 +1027,8 @@ class GazeManager:
         """True if `btn` is a different key from the one selected last,
         NEW_KEY_PAUSE has passed since, and that key's own dwell wasn't
         started this way (see NEW_KEY_PAUSE)."""
-        return (not self._after_paused_start and self._key_of(btn) != self._selected
+        return (not self._after_paused_start and not self._after_tap
+                and self._key_of(btn) != self._selected
                 and time.time() - self._selected_at >= NEW_KEY_PAUSE)
 
     def _start_paused_dwell(self, btn):
