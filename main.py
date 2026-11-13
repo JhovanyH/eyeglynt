@@ -1762,10 +1762,32 @@ CALIBRATION_POINTS = [
     (0.92, 0.12), (0.50, 0.12), (0.08, 0.12),   # bottom row: right, middle, left
     (0.08, 0.47),                               # middle left
 ]
-CALIBRATION_CAPTURE_TIME = 3.0  # seconds the dot stays at each point
-CALIBRATION_SETTLE_TIME = 1.0   # first part of those seconds is ignored: the
+CALIBRATION_CAPTURE_TIME = 4.0  # seconds the dot stays at each point
+CALIBRATION_SETTLE_TIME = 1.5   # first part of those seconds is ignored: the
                                 # eyes are still moving onto the new dot. Users
                                 # with motor impairments may need this time.
+# THE DOT appears big (DOT_START_SIZE) and shrinks to DOT_SIZE during the
+# settle time: the movement catches the eye and leads it to the dot's
+# middle, which has a small white centre (DOT_CENTRE_SIZE) to aim at.
+# Sizes in pixels (about 85 make 1 cm). On 13 November 2026 two stroke
+# patients' eyes did not stay on the old dot (40 pixels, 3 seconds per
+# dot, 1 second ignored), so it is now bigger and stays a second longer.
+DOT_START_SIZE = 120
+DOT_SIZE = 44
+DOT_CENTRE_SIZE = 12
+# DOTS SHOWN AGAIN. After the 9 dots, up to REDO_MAX_DOTS dots at which
+# the eyes did not stay on the dot are shown once more (the worst first),
+# and the new readings replace the old ones. A dot counts as missed if,
+# after the settle time, the eyes were closed or not seen for more than
+# half of the time (REDO_MIN_SEEN), or the readings moved around more
+# than REDO_MAX_SPREAD (standard deviation of fx or iy: the eyes
+# wandered). Checked on 13 November: 29 of 34 of the developer's own
+# saved calibrations would have shown no dot again (0.3 dots on average),
+# while the two patients' eye pictures had 1 to 4 such dots per
+# calibration. REDO_MAX_DOTS = 0 turns this off.
+REDO_MAX_DOTS = 3
+REDO_MIN_SEEN = 0.5
+REDO_MAX_SPREAD = 0.02
 COUNTDOWN_SECONDS = 3           # 3, 2, 1 after Start is pressed
 # The camera focuses on the eyes during the countdown (see FOCUS_ON_EYES
 # in gaze_engine.py). If it hasn't finished when the countdown ends, the
@@ -1902,7 +1924,7 @@ class CalibrationScreen(Screen):
         self.current_target_px = None  # (x, y) of the dot on display
         self.target_index = 0
         self.samples = []
-        self.stage = "ready"           # "ready", "countdown", "dots" or "test"
+        self.stage = "ready"           # "ready", "countdown", "dots", "redo" or "test"
         self.summary = ""              # the calibration result, shown at the end
         self.log_rows = []             # every reading, saved to a CSV file at the end
         self.test_results = []         # per test dot: (target x, target y, pointer positions)
@@ -1957,9 +1979,11 @@ class CalibrationScreen(Screen):
         )
         self.start_btn.bind(on_release=lambda b: self._start_countdown())
 
-        with self.canvas:
+        with self.canvas:   # the dot (see DOT_SIZE), off-screen until shown
             Color(0.9, 0.2, 0.2, 1)
-            self.dot = Ellipse(pos=(-100, -100), size=(40, 40))  # off-screen until shown
+            self.dot = Ellipse(pos=(-200, -200), size=(DOT_SIZE, DOT_SIZE))
+            Color(1, 1, 1, 1)
+            self.dot_centre = Ellipse(pos=(-200, -200), size=(DOT_CENTRE_SIZE, DOT_CENTRE_SIZE))
 
     # ---- stage 1: READY ------------------------------------------------
     def on_pre_enter(self, *args):
@@ -1979,8 +2003,11 @@ class CalibrationScreen(Screen):
         self.gaze_engine.clear_calibration()
         self.stage = "ready"
         self._leaving = False
-        self.dot.pos = (-100, -100)
+        self._hide_dot()
         self.eye_pictures = []
+        self._dot_results = {}   # calibration dot -> its readings (see _keep_dot_result)
+        self._redo_queue = []    # dots still to show again (see REDO_MAX_DOTS)
+        self._redo_total = 0
         # Sharpen the camera picture for where the user sits now (see
         # FOCUS_ON_EYES in gaze_engine.py), so the preview is sharp too.
         self.gaze_engine.request_focus()
@@ -2134,7 +2161,8 @@ class CalibrationScreen(Screen):
         fx, fy = self._points()[self.target_index]
         x, y = self.width * fx, self.height * fy
         self.current_target_px = (x, y)
-        self.dot.pos = (x - 20, y - 20)
+        self._draw_dot(0.0)
+        self._ticks_after_settle = 0   # checks after the settle time (see REDO_MIN_SEEN)
         self.samples = []      # fx readings (left/right) at this dot
         self.samples_vy = []   # vy readings (up/down, glints), only when a glint is seen
         self.samples_iy = []   # iy readings (up/down, iris against the eye corners)
@@ -2146,6 +2174,20 @@ class CalibrationScreen(Screen):
         self._sample_event = Clock.schedule_interval(self._collect_sample, 1 / 30)
         Clock.schedule_once(self._finish_current_target, CALIBRATION_CAPTURE_TIME)
 
+    def _draw_dot(self, elapsed):
+        """Draws the dot at the current target, `elapsed` seconds after it
+        appeared: it shrinks from DOT_START_SIZE to DOT_SIZE during the
+        settle time."""
+        x, y = self.current_target_px
+        shrunk = min(1.0, elapsed / CALIBRATION_SETTLE_TIME) if CALIBRATION_SETTLE_TIME > 0 else 1.0
+        size = DOT_START_SIZE + (DOT_SIZE - DOT_START_SIZE) * shrunk
+        self.dot.size = (size, size)
+        self.dot.pos = (x - size / 2, y - size / 2)
+        self.dot_centre.pos = (x - DOT_CENTRE_SIZE / 2, y - DOT_CENTRE_SIZE / 2)
+
+    def _hide_dot(self):
+        self.dot.pos = self.dot_centre.pos = (-200, -200)
+
     def _collect_sample(self, dt):
         feature = self.gaze_engine.get_latest_feature()
         # This picture's own readings, not averaged over time: averaged
@@ -2156,10 +2198,18 @@ class CalibrationScreen(Screen):
         # ran below 6.5 pictures a second.
         raw = self.gaze_engine.get_latest_raw_feature()
         elapsed = time.time() - self._target_start_time
+        if elapsed <= CALIBRATION_SETTLE_TIME + 0.1:
+            self._draw_dot(elapsed)   # still shrinking
         pointer = (self.gaze_engine.get_screen_x(), self.gaze_engine.get_screen_y())
         self._log(elapsed, feature, pointer, raw)
         if elapsed >= CALIBRATION_SETTLE_TIME:
+            self._ticks_after_settle += 1
             self._keep_eye_picture(elapsed)
+        # Short blinks already give no readings; longer eye closures do,
+        # and those readings are not where the user looks (see eyes_closed
+        # in gaze_engine.py). They stay in the CSV file, but not in the dot.
+        if raw is not None and self.gaze_engine.eyes_closed():
+            raw = None
         if self.stage == "test" and elapsed >= CALIBRATION_SETTLE_TIME:
             self.pointer_samples.append(pointer)
         # Ignore the first moment at each dot: the eyes are still moving there.
@@ -2180,8 +2230,11 @@ class CalibrationScreen(Screen):
         remaining = max(0.0, CALIBRATION_CAPTURE_TIME - elapsed)
         point_num = self.target_index + 1
         total_points = len(self._points())
+        if self.stage == "redo":
+            point_num = self._redo_total - len(self._redo_queue)
+            total_points = self._redo_total
         face_status = "face detected" if feature is not None else "FACE NOT DETECTED -- move into camera view"
-        what = "Accuracy test: look" if self.stage == "test" else "Look"
+        what = {"test": "Accuracy test: look", "redo": "Once more: look"}.get(self.stage, "Look")
         self.instruction_label.text = (
             f"{what} at the red dot  ({point_num} of {total_points})  --  "
             f"{remaining:.1f}s  --  [{face_status}]"
@@ -2192,6 +2245,10 @@ class CalibrationScreen(Screen):
         up to EYE_PICTURES_PER_DOT, each from a different camera picture.
         They are written to files at the end (_save_eye_pictures)."""
         if not SAVE_EYE_PICTURES or self._pictures_at_dot >= EYE_PICTURES_PER_DOT:
+            return
+        # Spread over the measured part of the dot's time, not all at its start.
+        spacing = (CALIBRATION_CAPTURE_TIME - CALIBRATION_SETTLE_TIME) / EYE_PICTURES_PER_DOT
+        if elapsed < CALIBRATION_SETTLE_TIME + self._pictures_at_dot * spacing:
             return
         picture = self.gaze_engine.get_eye_picture()
         if picture is None or picture[0] == self._last_picture_number:
@@ -2242,18 +2299,64 @@ class CalibrationScreen(Screen):
                 self._finish_test()
             return
 
-        self._add_dot_to_calibration()
-        self.target_index += 1
-        if self.target_index < len(CALIBRATION_POINTS):
+        self._keep_dot_result()
+        if self.stage == "dots":
+            self.target_index += 1
+            if self.target_index < len(CALIBRATION_POINTS):
+                self._show_current_target()
+                return
+            self._redo_queue = self._dots_to_redo()
+            self._redo_total = len(self._redo_queue)
+            if self._redo_queue:
+                print("[Calibration] showing dot(s) "
+                      + ", ".join(str(index + 1) for index in self._redo_queue)
+                      + " again: the eyes did not stay on them")
+                self.stage = "redo"
+        if self._redo_queue:
+            self.target_index = self._redo_queue.pop(0)
             self._show_current_target()
         else:
             self._finish_calibration()
 
+    def _keep_dot_result(self):
+        """Keeps this calibration dot's readings, how long the eyes were
+        seen and how much the readings moved (see REDO_MAX_DOTS), and the
+        head pose and face size now. They go to the gaze engine once all
+        dots are done (see _finish_calibration), so a dot shown again
+        replaces its first readings."""
+        seen = len(self.samples) / self._ticks_after_settle if self._ticks_after_settle else 0.0
+        spread = None
+        if len(self.samples) >= 2:
+            spread = float(max(np.std(self.samples), np.std(self.samples_iy)))
+        self._dot_results[self.target_index] = (self._dot_reading(), self.gaze_engine.head_and_face_size(),
+                                                seen, spread)
+        print(f"[Calibration] dot {self.target_index + 1}: eyes seen {seen:.0%} of the time, "
+              + ("no readings" if spread is None else f"spread {spread:.3f}"))
+
+    def _dots_to_redo(self):
+        """The calibration dots (indexes) at which the eyes did not stay on
+        the dot, the worst first, at most REDO_MAX_DOTS (see there)."""
+        missed = []
+        for index, (reading, head_and_size, seen, spread) in self._dot_results.items():
+            if seen < REDO_MIN_SEEN or spread is None:
+                missed.append((float("inf"), index))   # eyes closed or not seen
+            elif spread > REDO_MAX_SPREAD:
+                missed.append((spread, index))         # the eyes wandered
+        missed.sort(key=lambda m: (-m[0], m[1]))
+        return [index for _, index in missed[:REDO_MAX_DOTS]]
+
     def _add_dot_to_calibration(self):
         """Gives the gaze engine this dot's average readings (nothing if the
-        face wasn't seen here)."""
+        face wasn't seen here). Used for the accuracy test's dots."""
+        reading = self._dot_reading()
+        if reading is not None:
+            self.gaze_engine.add_calibration_point(**reading)
+
+    def _dot_reading(self):
+        """This dot's average readings, as add_calibration_point's
+        arguments, or None if the face wasn't seen here."""
         if not self.samples:
-            return
+            return None
         avg_fx = sum(self.samples) / len(self.samples)
         target_x, target_y = self.current_target_px
         # The glint measurements are only recorded if a glint was seen
@@ -2272,11 +2375,14 @@ class CalibrationScreen(Screen):
         for index in range(4):
             values = [sample[index] for sample in self.smoothed_samples if sample[index] is not None]
             shakes.append(float(np.std(values)) if len(values) >= 2 else None)
-        shakes = tuple(shakes)
-        self.gaze_engine.add_calibration_point(avg_fx, target_x, avg_vy, target_y, avg_iy, avg_hx,
-                                               shakes=shakes)
+        return dict(fx=avg_fx, screen_x=target_x, vy=avg_vy, screen_y=target_y, iy=avg_iy, hx=avg_hx,
+                    shakes=tuple(shakes))
 
     def _finish_calibration(self):
+        for index in sorted(self._dot_results):
+            reading, head_and_size, seen, spread = self._dot_results[index]
+            if reading is not None:
+                self.gaze_engine.add_calibration_point(**reading, head_and_size=head_and_size)
         try:
             fits = self.gaze_engine.fit_calibration()
         except ValueError as e:
@@ -2369,7 +2475,7 @@ class CalibrationScreen(Screen):
             self.summary = self.summary.replace(UPDOWN_FAILED_LINE, "")
 
     def _show_result(self):
-        self.dot.pos = (-100, -100)
+        self._hide_dot()
         self.stage = "result"
         self._place_label("center", RESULT_TEXT_SIZE, 0.8, markup=True)
         fps = self.gaze_engine.get_fps()
@@ -2498,7 +2604,7 @@ class CalibrationScreen(Screen):
         if self._sample_event is not None:
             self._sample_event.cancel()
             self._sample_event = None
-        self.dot.pos = (-100, -100)
+        self._hide_dot()
         for name, value in getattr(self, "_previous_calibration", {}).items():
             setattr(self.gaze_engine, name, value)
         print("[Calibration] Stopped from the dashboard"

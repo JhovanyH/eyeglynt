@@ -1311,6 +1311,7 @@ class GazeEngine:
                       _Eye(LEFT_IRIS_CENTER, LEFT_IRIS_EDGE, LEFT_EYE_CORNERS)]
         self._openness_history = []  # eye openness in recent frames, for the blink check
         self._closed_frames = 0      # frames in a row with the eyes nearly closed
+        self._eyes_closed = False    # nearly closed in the latest picture (see eyes_closed)
         self._latest_face_size = None  # smoothed face size, shared with the Kivy thread
         self._latest_head = None       # smoothed _head_pose, None if no face seen
         self._latest_debug_frame = None  # RGB numpy frame with dots drawn, for a live preview
@@ -1380,7 +1381,16 @@ class GazeEngine:
         self._openness_history = (self._openness_history + [openness])[-OPENNESS_HISTORY:]
         nearly_closed = openness < BLINK_OPENNESS * float(np.median(self._openness_history))
         self._closed_frames = self._closed_frames + 1 if nearly_closed else 0
+        self._eyes_closed = nearly_closed
         return 0 < self._closed_frames <= BLINK_MAX_FRAMES
+
+    def eyes_closed(self):
+        """True if the eyes were nearly closed in the latest picture (much
+        less open than usual, see BLINK_OPENNESS), however long they have
+        been closed. The gaze readings skip short blinks only (see
+        BLINK_MAX_FRAMES); the calibration uses this to also skip longer
+        closures, which some patients have (see REDO_MAX_DOTS in main.py)."""
+        return self._eyes_closed
 
     def _run_loop(self):
         try:
@@ -1724,24 +1734,31 @@ class GazeEngine:
         return self._y_fit is not None
 
     def add_calibration_point(self, fx, screen_x, vy=None, screen_y=None, iy=None, hx=None,
-                              shakes=None):
+                              shakes=None, head_and_size=None):
         """Stores one calibration dot's measurements. vy and hx are None
         when no glint was seen at that dot. `shakes` is how much each of
         (fx, vy, iy, hx) wobbled at the dot (standard deviation, None if
-        unknown), used to choose the fits (see _fit_axis). The current
-        face size and head pose are stored too, as the references for the
-        distance and head-movement corrections."""
-        head = self.get_head()
+        unknown), used to choose the fits (see _fit_axis). The face size
+        and head pose are stored too, as the references for the distance
+        and head-movement corrections: the current ones, or
+        `head_and_size` (from head_and_face_size) if the dot's readings
+        were taken earlier."""
+        head, face_size = head_and_size if head_and_size is not None else self.head_and_face_size()
         self._x_points.append((hx, fx, screen_x))
         self._x_heads.append(head)
         self._shakes.append(shakes or (None, None, None, None))
-        with self._lock:
-            face_size = self._latest_face_size
         if face_size is not None:
             self._calib_face_sizes.append(face_size)
         if screen_y is not None and iy is not None:
             self._y_points.append((vy, iy, screen_y))
             self._y_heads.append(head)
+
+    def head_and_face_size(self):
+        """(head pose, face size) right now, as add_calibration_point
+        stores them with a dot."""
+        with self._lock:
+            face_size = self._latest_face_size
+        return self.get_head(), face_size
 
     def clear_calibration(self):
         self._x_points = []
