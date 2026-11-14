@@ -63,12 +63,10 @@ GAZE_LOST_AFTER = 0.3  # seconds
 
 # NAVIGATION SELECTIONS are the ones that only move around the screens:
 # opening a letter group or a Quick Fires category, Back, 123/ABC, Shift,
-# the KEYBOARD / QUICK FIRES tabs. They are not saved, so the caregiver's
-# Activity Log shows the user's words: only selections that type, erase or
-# speak. (They used to be saved during Test Mode's free-look test; Test
-# Mode was removed on 8 November.) Set this to False to save navigation
-# selections too.
-NAVIGATION_ONLY_IN_FREE_LOOK = True
+# the KEYBOARD / QUICK FIRES tabs. They are saved as "navigation" so the
+# researcher's Activity Log shows every button the patient selected
+# (12 Nov); caregivers only see the selections that type, erase or speak,
+# and navigation selections are not counted in the metrics.
 
 VERSION = "eyeglynt-app"  # shown to researchers on the dashboard
 
@@ -156,7 +154,7 @@ class DashboardLink:
           element_id  which button, e.g. "kb:A", "kb:speak", "qf:pain:myheadhurts"
           text        what the caregiver reads in the Activity Log
           navigation  True for a selection that only moves around the
-                      screens (see NAVIGATION_ONLY_IN_FREE_LOOK)
+                      screens (saved as "navigation", see above)
         """
         if not self.enabled:
             return
@@ -164,11 +162,9 @@ class DashboardLink:
         dwell_ms = None if dwell_s is None else int(round(dwell_s * 1000))
         gaze_xy = None if pointer is None else (int(round(pointer[0])), int(round(pointer[1])))
         if navigation:
-            kind = "control"
+            kind = "navigation"
 
         def job(db):
-            if navigation and NAVIGATION_ONLY_IN_FREE_LOOK and not self._in_free_look(db):
-                return
             db.log_selection(interface, kind, element_id, text, category=category,
                              dwell_ms=dwell_ms, gaze_xy=gaze_xy, at=at)
         self._do(job)
@@ -282,13 +278,6 @@ class DashboardLink:
             if db.active_session():
                 db.raise_alert(alert_type, message, **details)
         self._do(job)
-
-    def _in_free_look(self, db):
-        session = db.active_session()
-        if not session or session["mode"] != "test":
-            return False
-        block = db.active_test_block(session["session_id"])
-        return block is not None and block["block_type"] == "free_look"
 
     def _resume_session(self, db):
         session = db.active_session(force=True)

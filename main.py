@@ -740,7 +740,7 @@ def tell_dashboard(btn, interface, kind, element_id, text, category=None, naviga
     Log (only while a caregiver has a session running there).
     interface: "keyboard" or "quickfire"; kind: "key", "shorthand",
     "phrase", "speak" or "control"; navigation=True for a selection that
-    only moves around the screens (see NAVIGATION_ONLY_IN_FREE_LOOK in
+    only moves around the screens (shown to researchers only, see
     dashboard_link.py)."""
     if getattr(btn, "tapped", False):   # picked by a tap, not by gaze (see TOUCH_SELECT)
         dashboard.selection(interface, kind, element_id, text + TAP_MARK, category=category,

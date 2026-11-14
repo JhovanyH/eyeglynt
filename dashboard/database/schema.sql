@@ -115,7 +115,7 @@ CREATE TABLE selections (
   block_id          INT UNSIGNED NULL,             -- set only in Test Mode
   selected_at       DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   interface         ENUM('keyboard','quickfire') NOT NULL,
-  selection_type    ENUM('key','shorthand','phrase','speak','control') NOT NULL,
+  selection_type    ENUM('key','shorthand','phrase','speak','control','navigation') NOT NULL,  -- navigation: researchers only, not in metrics
   element_id        VARCHAR(64)  NOT NULL,         -- e.g. 'kb:A', 'kb:speak', 'qf:pain:head'
   output_text       VARCHAR(500) NOT NULL,         -- character, word, or full spoken phrase
   category          VARCHAR(40)  NULL,             -- Quick-Fire tab name
@@ -266,7 +266,8 @@ LEFT JOIN (
              OR COALESCE(b.block_type = 'free_look', 0)), 0)  AS unintended
   FROM selections x
   LEFT JOIN test_blocks b ON b.block_id = x.block_id
-  WHERE x.intent_status <> 'ignored'      -- "Ignore" in the activity log: left out of every metric
+  WHERE x.intent_status <> 'ignored'      -- "Unintended" in the activity log: left out of every metric
+    AND x.selection_type <> 'navigation'  -- opening a group, Back, tabs: shown to researchers only
   GROUP BY x.session_id
 ) sel ON sel.session_id = s.session_id
 LEFT JOIN (
