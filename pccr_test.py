@@ -1,29 +1,8 @@
-"""
-EyeGlynt - Up/Down (PCCR) Test
-==============================
-Checks that the two up/down measurements actually change when you look
-up and down, BEFORE relying on them in the app:
-  vy  from the IR glints (PCCR)
-  iy  from the iris against the eye corners (MediaPipe)
+"""Up/down test: checks that vy (IR glints) and iy (iris) change when you look at
+the top, middle and bottom of the screen. Prints each one's average, wobble and
+glint rate, and saves eye close-ups (red = glints, blue = pupils).
 
-You look at the top, the middle and the bottom of the screen in turn.
-For each, the script records both for a few seconds and prints:
-  - the average (where your eyes were looking),
-  - the wobble (how much it moved while you held still),
-  - how often a glint was found.
-A measurement can track up/down if its three averages are clearly
-different and in order (top, middle, bottom), with gaps larger than the
-wobble. The app's calibration uses whichever fits best.
-
-It also saves a close-up of your eyes at each position (eyes_top.png,
-eyes_middle.png, eyes_bottom.png): red marks = the glints it found,
-blue marks = the pupil centres it found. These show whether it is
-locking onto the right things.
-
-RUN (on the Pi, IR LEDs on, sitting where a user would sit):
-    source ~/eyeglynt_env/bin/activate
-    cd ~/eyeglynt
-    python pccr_test.py
+Run on the Pi, IR LEDs on: cd ~/eyeglynt && python pccr_test.py
 """
 
 import struct
@@ -35,15 +14,11 @@ import numpy as np
 from gaze_engine import GazeEngine
 
 RECORD_SECONDS = 3.0   # how long to record at each position
-SETTLE_SECONDS = 0.5   # ignore the first moment, while the eyes move there
+SETTLE_SECONDS = 0.5  # ignore the first moment
 
 
 def save_png(filename, image):
-    """Saves an RGB numpy image as a PNG file using only Python's own
-    libraries (no OpenCV or Pillow needed). A PNG file is a signature
-    followed by three chunks: IHDR (size and colour type), IDAT (the
-    compressed pixel rows, each starting with a 0 "no filter" byte) and
-    IEND (the end)."""
+    """Saves an RGB numpy image as a PNG using only the standard library."""
     height, width = image.shape[:2]
 
     def chunk(kind, data):
@@ -59,8 +34,7 @@ def save_png(filename, image):
 
 
 def record(engine, seconds):
-    """Reads vy and iy from the engine for `seconds` seconds.
-    Returns (vy values, iy values, number of readings with a face)."""
+    """Reads vy and iy for seconds; returns (vy values, iy values, readings with a face)."""
     values_vy, values_iy, face_readings = [], [], 0
     end = time.time() + seconds
     while time.time() < end:
@@ -71,13 +45,12 @@ def record(engine, seconds):
             values_iy.append(iy)
             if vy is not None:
                 values_vy.append(vy)
-        time.sleep(1 / 15)  # about the camera's speed; no point reading faster
+        time.sleep(1 / 15)  # about the camera's speed
     return values_vy, values_iy, face_readings
 
 
 def verdict(name, results):
-    """Prints whether one measurement separates top, middle and bottom.
-    results: {position: (average, wobble)} for the 3 positions."""
+    """Prints whether a measurement separates top, middle and bottom."""
     top, middle, bottom = (results[p][0] for p in ("TOP", "MIDDLE", "BOTTOM"))
     wobble = max(results[p][1] for p in results)
     in_order = (top < middle < bottom) or (top > middle > bottom)
