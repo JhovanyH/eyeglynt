@@ -1,0 +1,143 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1300" height="860" viewBox="0 0 1300 860" font-family="DejaVu Sans"><rect x="0" y="0" width="1300" height="860" fill="#ffffff"/>
+<rect x="8" y="8" width="1284" height="844" fill="none" stroke="#840000" stroke-width="1.6"/>
+<rect x="24" y="24" width="1252" height="812" fill="none" stroke="#840000" stroke-width="1.2"/>
+<text x="128.33333333333331" y="20" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">1</text>
+<text x="128.33333333333331" y="848" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">1</text>
+<polyline points="232.66666666666666,8 232.66666666666666,24" fill="none" stroke="#840000" stroke-width="1.2"/>
+<text x="337.0" y="20" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">2</text>
+<polyline points="232.66666666666666,836 232.66666666666666,852" fill="none" stroke="#840000" stroke-width="1.2"/>
+<text x="337.0" y="848" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">2</text>
+<polyline points="441.3333333333333,8 441.3333333333333,24" fill="none" stroke="#840000" stroke-width="1.2"/>
+<text x="545.6666666666666" y="20" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">3</text>
+<polyline points="441.3333333333333,836 441.3333333333333,852" fill="none" stroke="#840000" stroke-width="1.2"/>
+<text x="545.6666666666666" y="848" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">3</text>
+<polyline points="650.0,8 650.0,24" fill="none" stroke="#840000" stroke-width="1.2"/>
+<text x="754.3333333333333" y="20" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">4</text>
+<polyline points="650.0,836 650.0,852" fill="none" stroke="#840000" stroke-width="1.2"/>
+<text x="754.3333333333333" y="848" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">4</text>
+<polyline points="858.6666666666666,8 858.6666666666666,24" fill="none" stroke="#840000" stroke-width="1.2"/>
+<text x="963.0" y="20" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">5</text>
+<polyline points="858.6666666666666,836 858.6666666666666,852" fill="none" stroke="#840000" stroke-width="1.2"/>
+<text x="963.0" y="848" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">5</text>
+<polyline points="1067.3333333333333,8 1067.3333333333333,24" fill="none" stroke="#840000" stroke-width="1.2"/>
+<text x="1171.6666666666665" y="20" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">6</text>
+<polyline points="1067.3333333333333,836 1067.3333333333333,852" fill="none" stroke="#840000" stroke-width="1.2"/>
+<text x="1171.6666666666665" y="848" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">6</text>
+<text x="16" y="129.5" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">A</text>
+<text x="1284" y="129.5" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">A</text>
+<polyline points="8,227.0 24,227.0" fill="none" stroke="#840000" stroke-width="1.2"/>
+<text x="16" y="332.5" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">B</text>
+<polyline points="1276,227.0 1292,227.0" fill="none" stroke="#840000" stroke-width="1.2"/>
+<text x="1284" y="332.5" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">B</text>
+<polyline points="8,430.0 24,430.0" fill="none" stroke="#840000" stroke-width="1.2"/>
+<text x="16" y="535.5" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">C</text>
+<polyline points="1276,430.0 1292,430.0" fill="none" stroke="#840000" stroke-width="1.2"/>
+<text x="1284" y="535.5" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">C</text>
+<polyline points="8,633.0 24,633.0" fill="none" stroke="#840000" stroke-width="1.2"/>
+<text x="16" y="738.5" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">D</text>
+<polyline points="1276,633.0 1292,633.0" fill="none" stroke="#840000" stroke-width="1.2"/>
+<text x="1284" y="738.5" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">D</text>
+<text x="165" y="62" font-size="15" fill="#000084" text-anchor="middle" font-weight="bold" font-style="normal">INPUT</text>
+<text x="630" y="62" font-size="15" fill="#000084" text-anchor="middle" font-weight="bold" font-style="normal">PROCESS</text>
+<text x="1125" y="62" font-size="15" fill="#000084" text-anchor="middle" font-weight="bold" font-style="normal">OUTPUT</text>
+<rect x="322" y="82" width="616" height="568" fill="none" stroke="#000084" stroke-width="1.6" stroke-dasharray="10 6"/>
+<text x="332" y="102" font-size="14" fill="#000084" text-anchor="start" font-weight="normal" font-style="italic">U1  Raspberry Pi 4 Model B: software</text>
+<rect x="60" y="100" width="210" height="80" fill="#FFFFC2" stroke="#840000" stroke-width="2.4"/>
+<text x="60" y="92" font-size="14" fill="#008484" text-anchor="start" font-weight="normal" font-style="normal">D1, D2</text>
+<text x="165.0" y="126" font-size="16.5" fill="#840000" text-anchor="middle" font-weight="bold" font-style="normal">IR LED boards</text>
+<text x="165.0" y="150" font-size="14.5" fill="#008484" text-anchor="middle" font-weight="normal" font-style="normal">850 nm, 3.3 V</text>
+<rect x="60" y="240" width="210" height="80" fill="#FFFFC2" stroke="#840000" stroke-width="2.4"/>
+<text x="165.0" y="266" font-size="16.5" fill="#840000" text-anchor="middle" font-weight="bold" font-style="normal">User's eyes</text>
+<text x="165.0" y="290" font-size="14.5" fill="#008484" text-anchor="middle" font-weight="normal" font-style="normal">look at a button</text>
+<rect x="60" y="380" width="210" height="90" fill="#FFFFC2" stroke="#840000" stroke-width="2.4"/>
+<text x="60" y="372" font-size="14" fill="#008484" text-anchor="start" font-weight="normal" font-style="normal">U4</text>
+<text x="165.0" y="406" font-size="16.5" fill="#840000" text-anchor="middle" font-weight="bold" font-style="normal">Camera</text>
+<text x="165.0" y="430" font-size="14.5" fill="#008484" text-anchor="middle" font-weight="normal" font-style="normal">Camera Module 3 NoIR</text>
+<text x="165.0" y="450" font-size="14.5" fill="#008484" text-anchor="middle" font-weight="normal" font-style="normal">8-12 pictures/s</text>
+<rect x="60" y="540" width="210" height="80" fill="#FFFFC2" stroke="#840000" stroke-width="2.4"/>
+<text x="60" y="532" font-size="14" fill="#008484" text-anchor="start" font-weight="normal" font-style="normal">DS1</text>
+<text x="165.0" y="566" font-size="16.5" fill="#840000" text-anchor="middle" font-weight="bold" font-style="normal">Touchscreen</text>
+<text x="165.0" y="590" font-size="14.5" fill="#008484" text-anchor="middle" font-weight="normal" font-style="normal">touch (tap backup)</text>
+<polyline points="165,180 165,240" fill="none" stroke="#008400" stroke-width="2.2"/>
+<polygon points="165,240 159,227 171,227" fill="#008400"/>
+<text x="175" y="215" font-size="13.5" fill="#000000" text-anchor="start" font-weight="normal" font-style="normal">IR light</text>
+<polyline points="165,320 165,380" fill="none" stroke="#008400" stroke-width="2.2"/>
+<polygon points="165,380 159,367 171,367" fill="#008400"/>
+<text x="175" y="355" font-size="13.5" fill="#000000" text-anchor="start" font-weight="normal" font-style="normal">eye image</text>
+<rect x="350" y="340" width="250" height="130" fill="#FFFFC2" stroke="#840000" stroke-width="2.4"/>
+<text x="475.0" y="366" font-size="16.5" fill="#840000" text-anchor="middle" font-weight="bold" font-style="normal">Gaze engine</text>
+<text x="475.0" y="390" font-size="14.5" fill="#008484" text-anchor="middle" font-weight="normal" font-style="normal">gaze_engine.py</text>
+<text x="475.0" y="410" font-size="14.5" fill="#008484" text-anchor="middle" font-weight="normal" font-style="normal">MediaPipe face + iris</text>
+<text x="475.0" y="430" font-size="14.5" fill="#008484" text-anchor="middle" font-weight="normal" font-style="normal">pupil + IR glints (PCCR)</text>
+<text x="475.0" y="450" font-size="14.5" fill="#008484" text-anchor="middle" font-weight="normal" font-style="normal">calibration fit</text>
+<rect x="680" y="340" width="240" height="130" fill="#FFFFC2" stroke="#840000" stroke-width="2.4"/>
+<text x="800.0" y="366" font-size="16.5" fill="#840000" text-anchor="middle" font-weight="bold" font-style="normal">User interface</text>
+<text x="800.0" y="390" font-size="14.5" fill="#008484" text-anchor="middle" font-weight="normal" font-style="normal">main.py (Kivy)</text>
+<text x="800.0" y="410" font-size="14.5" fill="#008484" text-anchor="middle" font-weight="normal" font-style="normal">dwell selection, 4 s</text>
+<text x="800.0" y="430" font-size="14.5" fill="#008484" text-anchor="middle" font-weight="normal" font-style="normal">Keyboard + Quick Fires</text>
+<rect x="680" y="130" width="240" height="90" fill="#FFFFC2" stroke="#840000" stroke-width="2.4"/>
+<text x="800.0" y="156" font-size="16.5" fill="#840000" text-anchor="middle" font-weight="bold" font-style="normal">Text-to-speech</text>
+<text x="800.0" y="180" font-size="14.5" fill="#008484" text-anchor="middle" font-weight="normal" font-style="normal">Piper voice (offline)</text>
+<text x="800.0" y="200" font-size="14.5" fill="#008484" text-anchor="middle" font-weight="normal" font-style="normal">espeak-ng backup</text>
+<rect x="680" y="540" width="240" height="95" fill="#FFFFC2" stroke="#840000" stroke-width="2.4"/>
+<text x="800.0" y="566" font-size="16.5" fill="#840000" text-anchor="middle" font-weight="bold" font-style="normal">Caregiver dashboard</text>
+<text x="800.0" y="590" font-size="14.5" fill="#008484" text-anchor="middle" font-weight="normal" font-style="normal">dashboard_link.py, MariaDB</text>
+<text x="800.0" y="610" font-size="14.5" fill="#008484" text-anchor="middle" font-weight="normal" font-style="normal">Flask web server :5000</text>
+<polyline points="270,425 350,425" fill="none" stroke="#008400" stroke-width="2.2"/>
+<polygon points="350,425 337,419 337,431" fill="#008400"/>
+<text x="296" y="417" font-size="13.5" fill="#000000" text-anchor="middle" font-weight="normal" font-style="normal">CSI</text>
+<polyline points="600,405 680,405" fill="none" stroke="#008400" stroke-width="2.2"/>
+<polygon points="680,405 667,399 667,411" fill="#008400"/>
+<text x="640" y="397" font-size="13.5" fill="#000000" text-anchor="middle" font-weight="normal" font-style="normal">gaze (x, y)</text>
+<polyline points="800,340 800,220" fill="none" stroke="#008400" stroke-width="2.2"/>
+<polygon points="800,220 794,233 806,233" fill="#008400"/>
+<text x="810" y="285" font-size="13.5" fill="#000000" text-anchor="start" font-weight="normal" font-style="normal">text to say</text>
+<polyline points="800,470 800,540" fill="none" stroke="#008400" stroke-width="2.2"/>
+<polygon points="800,540 794,527 806,527" fill="#008400"/>
+<polygon points="800,470 794,483 806,483" fill="#008400"/>
+<text x="810" y="500" font-size="13.5" fill="#000000" text-anchor="start" font-weight="normal" font-style="normal">selections, alerts</text>
+<text x="810" y="518" font-size="13.5" fill="#000000" text-anchor="start" font-weight="normal" font-style="normal">recalibrate</text>
+<polyline points="270,580 640,580 640,445 680,445" fill="none" stroke="#008400" stroke-width="2.2"/>
+<polygon points="680,445 667,439 667,451" fill="#008400"/>
+<text x="455" y="572" font-size="13.5" fill="#000000" text-anchor="middle" font-weight="normal" font-style="normal">USB touch</text>
+<rect x="1010" y="130" width="230" height="90" fill="#FFFFC2" stroke="#840000" stroke-width="2.4"/>
+<text x="1010" y="122" font-size="14" fill="#008484" text-anchor="start" font-weight="normal" font-style="normal">U2, LS1</text>
+<text x="1125.0" y="156" font-size="16.5" fill="#840000" text-anchor="middle" font-weight="bold" font-style="normal">Speaker</text>
+<text x="1125.0" y="180" font-size="14.5" fill="#008484" text-anchor="middle" font-weight="normal" font-style="normal">MAX98357A amplifier</text>
+<text x="1125.0" y="200" font-size="14.5" fill="#008484" text-anchor="middle" font-weight="normal" font-style="normal">8 Ω, 3 W</text>
+<rect x="1010" y="345" width="230" height="85" fill="#FFFFC2" stroke="#840000" stroke-width="2.4"/>
+<text x="1010" y="337" font-size="14" fill="#008484" text-anchor="start" font-weight="normal" font-style="normal">DS1</text>
+<text x="1125.0" y="371" font-size="16.5" fill="#840000" text-anchor="middle" font-weight="bold" font-style="normal">Touchscreen</text>
+<text x="1125.0" y="395" font-size="14.5" fill="#008484" text-anchor="middle" font-weight="normal" font-style="normal">10.1 in, 1280 × 800</text>
+<rect x="1010" y="545" width="230" height="85" fill="#FFFFC2" stroke="#840000" stroke-width="2.4"/>
+<text x="1125.0" y="571" font-size="16.5" fill="#840000" text-anchor="middle" font-weight="bold" font-style="normal">Caregiver's phone</text>
+<text x="1125.0" y="595" font-size="14.5" fill="#008484" text-anchor="middle" font-weight="normal" font-style="normal">web browser</text>
+<polyline points="920,175 1010,175" fill="none" stroke="#008400" stroke-width="2.2"/>
+<polygon points="1010,175 997,169 997,181" fill="#008400"/>
+<text x="965" y="167" font-size="13.5" fill="#000000" text-anchor="middle" font-weight="normal" font-style="normal">I2S</text>
+<polyline points="920,390 1010,390" fill="none" stroke="#008400" stroke-width="2.2"/>
+<polygon points="1010,390 997,384 997,396" fill="#008400"/>
+<text x="965" y="382" font-size="13.5" fill="#000000" text-anchor="middle" font-weight="normal" font-style="normal">HDMI</text>
+<polyline points="920,590 1010,590" fill="none" stroke="#008400" stroke-width="2.2"/>
+<polygon points="1010,590 997,584 997,596" fill="#008400"/>
+<polygon points="920,590 933,584 933,596" fill="#008400"/>
+<text x="965" y="582" font-size="13.5" fill="#000000" text-anchor="middle" font-weight="normal" font-style="normal">Wi-Fi</text>
+<text x="44" y="700" font-size="15" fill="#000084" text-anchor="start" font-weight="bold" font-style="normal">NOTES</text>
+<text x="44" y="724" font-size="14.5" fill="#000084" text-anchor="start" font-weight="normal" font-style="normal">1. Arrows show the flow of data between the blocks.</text>
+<text x="44" y="748" font-size="14.5" fill="#000084" text-anchor="start" font-weight="normal" font-style="normal">2. Everything inside the dashed box runs on the Raspberry Pi; no outside computer is needed.</text>
+<text x="44" y="772" font-size="14.5" fill="#000084" text-anchor="start" font-weight="normal" font-style="normal">3. The touchscreen is both an input (touch) and an output (display).</text>
+<text x="44" y="796" font-size="14.5" fill="#000084" text-anchor="start" font-weight="normal" font-style="normal">4. The phone and the device must be on the same Wi-Fi network or hotspot.</text>
+<rect x="880" y="690" width="396" height="146" fill="none" stroke="#840000" stroke-width="1.6"/>
+<polyline points="880,774 1276,774" fill="none" stroke="#840000" stroke-width="1.2"/>
+<polyline points="880,804 1276,804" fill="none" stroke="#840000" stroke-width="1.2"/>
+<polyline points="990,774 990,836" fill="none" stroke="#840000" stroke-width="1.2"/>
+<polyline points="1160,774 1160,836" fill="none" stroke="#840000" stroke-width="1.2"/>
+<text x="888" y="710" font-size="12" fill="#840000" text-anchor="start" font-weight="normal" font-style="normal">Title:</text>
+<text x="888" y="730" font-size="17" fill="#000000" text-anchor="start" font-weight="bold" font-style="normal">EyeGlynt: System Block Diagram</text>
+<text x="888" y="756" font-size="17" fill="#000000" text-anchor="start" font-weight="bold" font-style="normal">(Input, Process, Output)</text>
+<text x="888" y="794" font-size="13.5" fill="#000000" text-anchor="start" font-weight="normal" font-style="normal">Size: A4</text>
+<text x="998" y="794" font-size="13.5" fill="#000000" text-anchor="start" font-weight="normal" font-style="normal">Date: 16 Nov 2026</text>
+<text x="1168" y="794" font-size="13.5" fill="#000000" text-anchor="start" font-weight="normal" font-style="normal">Rev: 1.0</text>
+<text x="888" y="824" font-size="13.5" fill="#000000" text-anchor="start" font-weight="normal" font-style="normal">Figure 9</text>
+<text x="998" y="824" font-size="13.5" fill="#000000" text-anchor="start" font-weight="normal" font-style="normal">Raspberry Pi 4</text>
+<text x="1168" y="824" font-size="13.5" fill="#000000" text-anchor="start" font-weight="normal" font-style="normal">Sheet: 1/1</text></svg>
