@@ -1,0 +1,207 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1300" height="860" viewBox="0 0 1300 860" font-family="DejaVu Sans"><rect x="0" y="0" width="1300" height="860" fill="#ffffff"/>
+<rect x="8" y="8" width="1284" height="844" fill="none" stroke="#840000" stroke-width="1.6"/>
+<rect x="24" y="24" width="1252" height="812" fill="none" stroke="#840000" stroke-width="1.2"/>
+<text x="128.33333333333331" y="20" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">1</text>
+<text x="128.33333333333331" y="848" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">1</text>
+<polyline points="232.66666666666666,8 232.66666666666666,24" fill="none" stroke="#840000" stroke-width="1.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="337.0" y="20" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">2</text>
+<polyline points="232.66666666666666,836 232.66666666666666,852" fill="none" stroke="#840000" stroke-width="1.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="337.0" y="848" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">2</text>
+<polyline points="441.3333333333333,8 441.3333333333333,24" fill="none" stroke="#840000" stroke-width="1.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="545.6666666666666" y="20" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">3</text>
+<polyline points="441.3333333333333,836 441.3333333333333,852" fill="none" stroke="#840000" stroke-width="1.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="545.6666666666666" y="848" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">3</text>
+<polyline points="650.0,8 650.0,24" fill="none" stroke="#840000" stroke-width="1.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="754.3333333333333" y="20" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">4</text>
+<polyline points="650.0,836 650.0,852" fill="none" stroke="#840000" stroke-width="1.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="754.3333333333333" y="848" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">4</text>
+<polyline points="858.6666666666666,8 858.6666666666666,24" fill="none" stroke="#840000" stroke-width="1.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="963.0" y="20" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">5</text>
+<polyline points="858.6666666666666,836 858.6666666666666,852" fill="none" stroke="#840000" stroke-width="1.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="963.0" y="848" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">5</text>
+<polyline points="1067.3333333333333,8 1067.3333333333333,24" fill="none" stroke="#840000" stroke-width="1.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="1171.6666666666665" y="20" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">6</text>
+<polyline points="1067.3333333333333,836 1067.3333333333333,852" fill="none" stroke="#840000" stroke-width="1.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="1171.6666666666665" y="848" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">6</text>
+<text x="16" y="129.5" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">A</text>
+<text x="1284" y="129.5" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">A</text>
+<polyline points="8,227.0 24,227.0" fill="none" stroke="#840000" stroke-width="1.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="16" y="332.5" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">B</text>
+<polyline points="1276,227.0 1292,227.0" fill="none" stroke="#840000" stroke-width="1.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="1284" y="332.5" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">B</text>
+<polyline points="8,430.0 24,430.0" fill="none" stroke="#840000" stroke-width="1.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="16" y="535.5" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">C</text>
+<polyline points="1276,430.0 1292,430.0" fill="none" stroke="#840000" stroke-width="1.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="1284" y="535.5" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">C</text>
+<polyline points="8,633.0 24,633.0" fill="none" stroke="#840000" stroke-width="1.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="16" y="738.5" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">D</text>
+<polyline points="1276,633.0 1292,633.0" fill="none" stroke="#840000" stroke-width="1.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="1284" y="738.5" font-size="11" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">D</text>
+<rect x="470" y="140" width="240" height="460" fill="#FFFFC2" stroke="#840000" stroke-width="2.4"/>
+<text x="470" y="130" font-size="16" fill="#008484" text-anchor="start" font-weight="normal" font-style="normal">U1</text>
+<text x="590" y="628" font-size="16" fill="#008484" text-anchor="middle" font-weight="normal" font-style="normal">Raspberry Pi 4 Model B (4 GB)</text>
+<text x="590" y="170" font-size="13" fill="#008484" text-anchor="middle" font-weight="normal" font-style="italic">J8 GPIO header</text>
+<polyline points="710,175 740,175" fill="none" stroke="#840000" stroke-width="2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="725.0" y="170" font-size="13" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">2</text>
+<text x="702" y="180.5" font-size="15.5" fill="#008484" text-anchor="end" font-weight="normal" font-style="normal">5V</text>
+<polyline points="710,215 740,215" fill="none" stroke="#840000" stroke-width="2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="725.0" y="210" font-size="13" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">6</text>
+<text x="702" y="220.5" font-size="15.5" fill="#008484" text-anchor="end" font-weight="normal" font-style="normal">GND</text>
+<polyline points="710,330 740,330" fill="none" stroke="#840000" stroke-width="2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="725.0" y="325" font-size="13" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">4</text>
+<text x="702" y="335.5" font-size="15.5" fill="#008484" text-anchor="end" font-weight="normal" font-style="normal">5V</text>
+<polyline points="710,375 740,375" fill="none" stroke="#840000" stroke-width="2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="725.0" y="370" font-size="13" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">12</text>
+<text x="702" y="380.5" font-size="15.5" fill="#008484" text-anchor="end" font-weight="normal" font-style="normal">GPIO18 / PCM_CLK</text>
+<polyline points="710,420 740,420" fill="none" stroke="#840000" stroke-width="2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="725.0" y="415" font-size="13" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">14</text>
+<text x="702" y="425.5" font-size="15.5" fill="#008484" text-anchor="end" font-weight="normal" font-style="normal">GND</text>
+<polyline points="710,465 740,465" fill="none" stroke="#840000" stroke-width="2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="725.0" y="460" font-size="13" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">35</text>
+<text x="702" y="470.5" font-size="15.5" fill="#008484" text-anchor="end" font-weight="normal" font-style="normal">GPIO19 / PCM_FS</text>
+<polyline points="710,510 740,510" fill="none" stroke="#840000" stroke-width="2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="725.0" y="505" font-size="13" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">39</text>
+<text x="702" y="515.5" font-size="15.5" fill="#008484" text-anchor="end" font-weight="normal" font-style="normal">GND</text>
+<polyline points="710,555 740,555" fill="none" stroke="#840000" stroke-width="2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="725.0" y="550" font-size="13" fill="#840000" text-anchor="middle" font-weight="normal" font-style="normal">40</text>
+<text x="702" y="560.5" font-size="15.5" fill="#008484" text-anchor="end" font-weight="normal" font-style="normal">GPIO21 / PCM_DOUT</text>
+<polyline points="470,190 440,190" fill="none" stroke="#840000" stroke-width="2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="478" y="195.5" font-size="15.5" fill="#008484" text-anchor="start" font-weight="normal" font-style="normal">CAM (CSI)</text>
+<polyline points="470,320 440,320" fill="none" stroke="#840000" stroke-width="2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="478" y="325.5" font-size="15.5" fill="#008484" text-anchor="start" font-weight="normal" font-style="normal">PWR IN (USB-C)</text>
+<polyline points="470,440 440,440" fill="none" stroke="#840000" stroke-width="2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="478" y="445.5" font-size="15.5" fill="#008484" text-anchor="start" font-weight="normal" font-style="normal">HDMI0 (micro)</text>
+<polyline points="470,520 440,520" fill="none" stroke="#840000" stroke-width="2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="478" y="525.5" font-size="15.5" fill="#008484" text-anchor="start" font-weight="normal" font-style="normal">USB</text>
+<rect x="880" y="145" width="150" height="100" fill="#FFFFC2" stroke="#840000" stroke-width="2.4"/>
+<text x="880" y="135" font-size="16" fill="#008484" text-anchor="start" font-weight="normal" font-style="normal">U3</text>
+<text x="955" y="267" font-size="14.5" fill="#008484" text-anchor="middle" font-weight="normal" font-style="normal">LM2596 buck module</text>
+<text x="955" y="285" font-size="14.5" fill="#008484" text-anchor="middle" font-weight="normal" font-style="normal">OUT set to 3.3 V</text>
+<polyline points="880,175 850,175" fill="none" stroke="#840000" stroke-width="2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="888" y="180.5" font-size="15.5" fill="#008484" text-anchor="start" font-weight="normal" font-style="normal">IN+</text>
+<polyline points="880,215 850,215" fill="none" stroke="#840000" stroke-width="2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="888" y="220.5" font-size="15.5" fill="#008484" text-anchor="start" font-weight="normal" font-style="normal">IN−</text>
+<polyline points="1030,175 1060,175" fill="none" stroke="#840000" stroke-width="2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="1022" y="180.5" font-size="15.5" fill="#008484" text-anchor="end" font-weight="normal" font-style="normal">OUT+</text>
+<polyline points="1030,215 1060,215" fill="none" stroke="#840000" stroke-width="2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="1022" y="220.5" font-size="15.5" fill="#008484" text-anchor="end" font-weight="normal" font-style="normal">OUT−</text>
+<polyline points="740,175 850,175" fill="none" stroke="#008400" stroke-width="2.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="752" y="169" font-size="13.5" fill="#000000" text-anchor="start" font-weight="normal" font-style="normal">+5V</text>
+<polyline points="740,215 850,215" fill="none" stroke="#008400" stroke-width="2.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="752" y="209" font-size="13.5" fill="#000000" text-anchor="start" font-weight="normal" font-style="normal">GND</text>
+<polyline points="1060,175 1080,175 1080,110 1215,110" fill="none" stroke="#008400" stroke-width="2.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<polyline points="1060,215 1080,215 1080,330 1215,330" fill="none" stroke="#008400" stroke-width="2.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<circle cx="1140" cy="110" r="4.5" fill="#008400"/>
+<circle cx="1140" cy="330" r="4.5" fill="#008400"/>
+<polyline points="1140,110 1140,200" fill="none" stroke="#008400" stroke-width="2.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<polyline points="1140,240 1140,330" fill="none" stroke="#008400" stroke-width="2.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<polygon points="1125,200 1155,200 1140,226" fill="none" stroke="#840000" stroke-width="2.2"/>
+<polyline points="1125,226 1155,226" fill="none" stroke="#840000" stroke-width="2.4" stroke-linejoin="miter" stroke-linecap="square"/>
+<polyline points="1140,226 1140,240" fill="none" stroke="#008400" stroke-width="2.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<polyline points="1158,206 1174,194" fill="none" stroke="#840000" stroke-width="1.6" stroke-linejoin="miter" stroke-linecap="square"/>
+<polygon points="1174,194 1166,195 1171,201" fill="#840000"/>
+<polyline points="1158,219 1174,207" fill="none" stroke="#840000" stroke-width="1.6" stroke-linejoin="miter" stroke-linecap="square"/>
+<polygon points="1174,207 1166,208 1171,214" fill="#840000"/>
+<text x="1148" y="262" font-size="15" fill="#008484" text-anchor="start" font-weight="normal" font-style="normal">D1</text>
+<polyline points="1215,110 1215,200" fill="none" stroke="#008400" stroke-width="2.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<polyline points="1215,240 1215,330" fill="none" stroke="#008400" stroke-width="2.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<polygon points="1200,200 1230,200 1215,226" fill="none" stroke="#840000" stroke-width="2.2"/>
+<polyline points="1200,226 1230,226" fill="none" stroke="#840000" stroke-width="2.4" stroke-linejoin="miter" stroke-linecap="square"/>
+<polyline points="1215,226 1215,240" fill="none" stroke="#008400" stroke-width="2.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<polyline points="1233,206 1249,194" fill="none" stroke="#840000" stroke-width="1.6" stroke-linejoin="miter" stroke-linecap="square"/>
+<polygon points="1249,194 1241,195 1246,201" fill="#840000"/>
+<polyline points="1233,219 1249,207" fill="none" stroke="#840000" stroke-width="1.6" stroke-linejoin="miter" stroke-linecap="square"/>
+<polygon points="1249,207 1241,208 1246,214" fill="#840000"/>
+<text x="1223" y="262" font-size="15" fill="#008484" text-anchor="start" font-weight="normal" font-style="normal">D2</text>
+<text x="1180" y="356" font-size="14.5" fill="#008484" text-anchor="middle" font-weight="normal" font-style="normal">D1, D2: IR LED boards</text>
+<text x="1180" y="374" font-size="14.5" fill="#008484" text-anchor="middle" font-weight="normal" font-style="normal">850 nm, 3 W each</text>
+<text x="1088" y="104" font-size="13.5" fill="#000000" text-anchor="start" font-weight="normal" font-style="normal">+3V3</text>
+<rect x="880" y="305" width="170" height="315" fill="#FFFFC2" stroke="#840000" stroke-width="2.4"/>
+<text x="880" y="290" font-size="1" fill="#000000" text-anchor="start" font-weight="normal" font-style="normal"></text>
+<polyline points="880,330 850,330" fill="none" stroke="#840000" stroke-width="2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="888" y="335.5" font-size="15.5" fill="#008484" text-anchor="start" font-weight="normal" font-style="normal">VIN</text>
+<polyline points="880,375 850,375" fill="none" stroke="#840000" stroke-width="2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="888" y="380.5" font-size="15.5" fill="#008484" text-anchor="start" font-weight="normal" font-style="normal">BCLK</text>
+<polyline points="880,420 850,420" fill="none" stroke="#840000" stroke-width="2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="888" y="425.5" font-size="15.5" fill="#008484" text-anchor="start" font-weight="normal" font-style="normal">GND</text>
+<polyline points="880,465 850,465" fill="none" stroke="#840000" stroke-width="2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="888" y="470.5" font-size="15.5" fill="#008484" text-anchor="start" font-weight="normal" font-style="normal">LRC</text>
+<polyline points="880,510 850,510" fill="none" stroke="#840000" stroke-width="2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="888" y="515.5" font-size="15.5" fill="#008484" text-anchor="start" font-weight="normal" font-style="normal">GAIN</text>
+<polyline points="880,555 850,555" fill="none" stroke="#840000" stroke-width="2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="888" y="560.5" font-size="15.5" fill="#008484" text-anchor="start" font-weight="normal" font-style="normal">DIN</text>
+<polyline points="880,595 850,595" fill="none" stroke="#840000" stroke-width="2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="888" y="600.5" font-size="15.5" fill="#008484" text-anchor="start" font-weight="normal" font-style="normal">SD</text>
+<polyline points="843,588 857,602" fill="none" stroke="#000084" stroke-width="2" stroke-linejoin="miter" stroke-linecap="square"/>
+<polyline points="843,602 857,588" fill="none" stroke="#000084" stroke-width="2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="1050" y="644" font-size="15" fill="#008484" text-anchor="end" font-weight="normal" font-style="normal">U2  MAX98357A I2S amplifier</text>
+<polyline points="740,330 850,330" fill="none" stroke="#008400" stroke-width="2.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="752" y="324" font-size="13.5" fill="#000000" text-anchor="start" font-weight="normal" font-style="normal">+5V</text>
+<polyline points="740,375 850,375" fill="none" stroke="#008400" stroke-width="2.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="752" y="369" font-size="13.5" fill="#000000" text-anchor="start" font-weight="normal" font-style="normal">I2S_BCLK</text>
+<polyline points="740,420 850,420" fill="none" stroke="#008400" stroke-width="2.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="752" y="414" font-size="13.5" fill="#000000" text-anchor="start" font-weight="normal" font-style="normal">GND</text>
+<polyline points="740,465 850,465" fill="none" stroke="#008400" stroke-width="2.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="752" y="459" font-size="13.5" fill="#000000" text-anchor="start" font-weight="normal" font-style="normal">I2S_LRCLK</text>
+<polyline points="740,510 850,510" fill="none" stroke="#008400" stroke-width="2.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="752" y="504" font-size="13.5" fill="#000000" text-anchor="start" font-weight="normal" font-style="normal">GND</text>
+<polyline points="740,555 850,555" fill="none" stroke="#008400" stroke-width="2.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="752" y="549" font-size="13.5" fill="#000000" text-anchor="start" font-weight="normal" font-style="normal">I2S_DOUT</text>
+<polyline points="1050,465 1080,465" fill="none" stroke="#840000" stroke-width="2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="1042" y="470.5" font-size="15.5" fill="#008484" text-anchor="end" font-weight="normal" font-style="normal">OUT+</text>
+<polyline points="1050,525 1080,525" fill="none" stroke="#840000" stroke-width="2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="1042" y="530.5" font-size="15.5" fill="#008484" text-anchor="end" font-weight="normal" font-style="normal">OUT−</text>
+<polyline points="1080,465 1110,465 1110,483 1150,483" fill="none" stroke="#008400" stroke-width="2.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<polyline points="1080,525 1120,525 1120,507 1150,507" fill="none" stroke="#008400" stroke-width="2.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<rect x="1150" y="470" width="18" height="50" fill="#FFFFC2" stroke="#840000" stroke-width="2.2"/>
+<polygon points="1168,470 1200,442 1200,548 1168,520" fill="#FFFFC2" stroke="#840000" stroke-width="2.2"/>
+<text x="1175" y="432" font-size="15" fill="#008484" text-anchor="middle" font-weight="normal" font-style="normal">LS1</text>
+<text x="1175" y="572" font-size="14.5" fill="#008484" text-anchor="middle" font-weight="normal" font-style="normal">8 Ω, 3 W</text>
+<rect x="60" y="150" width="190" height="80" fill="#FFFFC2" stroke="#840000" stroke-width="2.4"/>
+<text x="60" y="140" font-size="16" fill="#008484" text-anchor="start" font-weight="normal" font-style="normal">U4</text>
+<text x="155.0" y="252" font-size="14.5" fill="#008484" text-anchor="middle" font-weight="normal" font-style="normal">Camera Module 3 NoIR</text>
+<text x="155.0" y="270" font-size="14.5" fill="#008484" text-anchor="middle" font-weight="normal" font-style="normal">(Sony IMX708)</text>
+<polyline points="250,190 280,190" fill="none" stroke="#840000" stroke-width="2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="242" y="195.5" font-size="15.5" fill="#008484" text-anchor="end" font-weight="normal" font-style="normal">CSI</text>
+<polyline points="280,190 440,190" fill="none" stroke="#000084" stroke-width="4.5"/>
+<text x="360.0" y="182" font-size="13.5" fill="#000084" text-anchor="middle" font-weight="normal" font-style="normal">15-pin FFC ribbon</text>
+<rect x="60" y="300" width="190" height="40" fill="#FFFFC2" stroke="#840000" stroke-width="2.4"/>
+<text x="60" y="290" font-size="16" fill="#008484" text-anchor="start" font-weight="normal" font-style="normal">PS1</text>
+<text x="155.0" y="362" font-size="14.5" fill="#008484" text-anchor="middle" font-weight="normal" font-style="normal">5 V USB-C power supply</text>
+<polyline points="250,320 280,320" fill="none" stroke="#840000" stroke-width="2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="242" y="325.5" font-size="15.5" fill="#008484" text-anchor="end" font-weight="normal" font-style="normal">5V / GND</text>
+<polyline points="280,320 440,320" fill="none" stroke="#000084" stroke-width="4.5"/>
+<text x="360.0" y="312" font-size="13.5" fill="#000084" text-anchor="middle" font-weight="normal" font-style="normal">USB-C</text>
+<rect x="60" y="405" width="190" height="150" fill="#FFFFC2" stroke="#840000" stroke-width="2.4"/>
+<text x="60" y="395" font-size="16" fill="#008484" text-anchor="start" font-weight="normal" font-style="normal">DS1</text>
+<text x="155.0" y="577" font-size="14.5" fill="#008484" text-anchor="middle" font-weight="normal" font-style="normal">10.1-inch touchscreen</text>
+<text x="155.0" y="595" font-size="14.5" fill="#008484" text-anchor="middle" font-weight="normal" font-style="normal">1280 × 800, capacitive</text>
+<polyline points="250,440 280,440" fill="none" stroke="#840000" stroke-width="2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="242" y="445.5" font-size="15.5" fill="#008484" text-anchor="end" font-weight="normal" font-style="normal">HDMI</text>
+<polyline points="250,520 280,520" fill="none" stroke="#840000" stroke-width="2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="242" y="525.5" font-size="15.5" fill="#008484" text-anchor="end" font-weight="normal" font-style="normal">USB</text>
+<polyline points="280,440 440,440" fill="none" stroke="#000084" stroke-width="4.5"/>
+<text x="360.0" y="432" font-size="13.5" fill="#000084" text-anchor="middle" font-weight="normal" font-style="normal">micro-HDMI to HDMI</text>
+<polyline points="280,520 440,520" fill="none" stroke="#000084" stroke-width="4.5"/>
+<text x="360.0" y="512" font-size="13.5" fill="#000084" text-anchor="middle" font-weight="normal" font-style="normal">USB (touch)</text>
+<text x="44" y="690" font-size="15" fill="#000084" text-anchor="start" font-weight="bold" font-style="normal">NOTES</text>
+<text x="44" y="712" font-size="14.5" fill="#000084" text-anchor="start" font-weight="normal" font-style="normal">1. All GND pins of the Raspberry Pi are common.</text>
+<text x="44" y="734" font-size="14.5" fill="#000084" text-anchor="start" font-weight="normal" font-style="normal">2. LM2596 output adjusted to 3.3 V before the IR boards are connected.</text>
+<text x="44" y="756" font-size="14.5" fill="#000084" text-anchor="start" font-weight="normal" font-style="normal">3. IR boards are mounted apart from the camera board (their holes carry 3.3 V).</text>
+<text x="44" y="778" font-size="14.5" fill="#000084" text-anchor="start" font-weight="normal" font-style="normal">4. MAX98357A: SD not connected; GAIN tied to GND (12 dB).</text>
+<text x="44" y="800" font-size="14.5" fill="#000084" text-anchor="start" font-weight="normal" font-style="normal">5. Audio enabled with dtoverlay=max98357a,no-sdmode in /boot/firmware/config.txt.</text>
+<rect x="880" y="690" width="396" height="146" fill="none" stroke="#840000" stroke-width="1.6"/>
+<polyline points="880,774 1276,774" fill="none" stroke="#840000" stroke-width="1.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<polyline points="880,804 1276,804" fill="none" stroke="#840000" stroke-width="1.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<polyline points="990,774 990,836" fill="none" stroke="#840000" stroke-width="1.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<polyline points="1160,774 1160,836" fill="none" stroke="#840000" stroke-width="1.2" stroke-linejoin="miter" stroke-linecap="square"/>
+<text x="888" y="710" font-size="12" fill="#840000" text-anchor="start" font-weight="normal" font-style="normal">Title:</text>
+<text x="888" y="730" font-size="17" fill="#000000" text-anchor="start" font-weight="bold" font-style="normal">EyeGlynt: Internal Components and</text>
+<text x="888" y="734" font-size="1" fill="#000000" text-anchor="start" font-weight="normal" font-style="normal"></text>
+<text x="888" y="756" font-size="17" fill="#000000" text-anchor="start" font-weight="bold" font-style="normal">Circuit Connections</text>
+<text x="888" y="794" font-size="13.5" fill="#000000" text-anchor="start" font-weight="normal" font-style="normal">Size: A4</text>
+<text x="998" y="794" font-size="13.5" fill="#000000" text-anchor="start" font-weight="normal" font-style="normal">Date: 16 Nov 2026</text>
+<text x="1168" y="794" font-size="13.5" fill="#000000" text-anchor="start" font-weight="normal" font-style="normal">Rev: 1.0</text>
+<text x="888" y="824" font-size="13.5" fill="#000000" text-anchor="start" font-weight="normal" font-style="normal">Figure 3</text>
+<text x="998" y="824" font-size="13.5" fill="#000000" text-anchor="start" font-weight="normal" font-style="normal">Raspberry Pi 4</text>
+<text x="1168" y="824" font-size="13.5" fill="#000000" text-anchor="start" font-weight="normal" font-style="normal">Sheet: 1/1</text></svg>
