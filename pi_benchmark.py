@@ -1,23 +1,6 @@
-"""
-EyeGlynt - Raspberry Pi Performance Benchmark
-==============================================
-Measures how fast MediaPipe face-landmark detection actually runs on
-this Pi, using the Camera Module 3 NoIR via picamera2.
+"""Pi benchmark: how fast MediaPipe face landmarks run with the Camera Module 3 NoIR.
 
-This answers the key unknown before adapting the full gaze engine: if
-this runs at 15+ fps, the existing design works as-is. If it's much
-slower, we need to rethink (smaller capture resolution, processing
-every Nth frame, etc.) before building on top of it.
-
-It also verifies the whole Pi-side pipeline in one shot:
-camera -> frame -> MediaPipe -> iris landmarks.
-
-RUN (on the Pi, with the venv active):
-    source ~/eyeglynt_env/bin/activate
-    cd ~/eyeglynt
-    python pi_benchmark.py
-
-No preview window is opened, so this works fine over SSH.
+Run on the Pi: cd ~/eyeglynt && python pi_benchmark.py (no window, works over SSH)
 """
 
 import os
@@ -29,7 +12,7 @@ import mediapipe as mp
 from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision as mp_vision
 from picamera2 import Picamera2
-from libcamera import controls  # names for camera settings (autofocus mode)
+from libcamera import controls  # autofocus mode names
 
 MODEL_PATH = "face_landmarker.task"
 MODEL_URL = (
@@ -37,13 +20,10 @@ MODEL_URL = (
     "face_landmarker/float16/1/face_landmarker.task"
 )
 
-# The Camera Module 3 NoIR has automatic exposure that works out of the
-# box, so no shutter or gain values are set here. Focus is fixed at the
-# user's distance; lens position is in dioptres = 1 / distance in metres.
+# Automatic exposure; fixed focus at the user's distance (dioptres = 1 / metres).
 FOCUS_DISTANCE_M = 0.5
 
-# Same as gaze_engine.py: capture at 1536x864 (detail for the IR
-# glints), and give MediaPipe every 2nd pixel (768x432) to keep it fast.
+# Same as gaze_engine.py: full-view capture, MediaPipe gets every 2nd pixel.
 CAPTURE_WIDTH, CAPTURE_HEIGHT = 1536, 864
 MEDIAPIPE_STEP = 2
 
@@ -78,8 +58,7 @@ def main():
 
     print("Setting up camera ...")
     picam2 = Picamera2()
-    # picamera2's "BGR888" gives pixels in [R, G, B] order, which is
-    # what MediaPipe expects (same as in gaze_engine.py).
+    # "BGR888" gives pixels in RGB order, as MediaPipe expects.
     config = picam2.create_preview_configuration(
         main={"size": (CAPTURE_WIDTH, CAPTURE_HEIGHT), "format": "BGR888"}
     )

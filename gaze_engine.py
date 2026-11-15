@@ -1,43 +1,14 @@
-"""
-EyeGlynt - Gaze Engine
-======================
-Runs the camera + MediaPipe tracking in its own background thread,
-so it never blocks Kivy's UI loop, and exposes a small, simple API:
+"""EyeGlynt gaze engine: camera + MediaPipe tracking in a background thread.
 
-    engine = GazeEngine()
-    engine.start()
-    engine.get_latest_feature()   -> (fx, vy, iy, hx) or None; vy, hx may be None
-    engine.add_calibration_point(fx, screen_x, vy, screen_y, iy, hx)
-    engine.fit_calibration()
-    engine.get_screen_x()         -> predicted screen X, or None
-    engine.get_screen_y()         -> predicted screen Y, or None
+Measurements (averaged over both eyes):
+  fx      left/right: the iris (or pupil) between the eye corners
+  iy      up/down: the iris (or pupil) height against the eye corners
+  vy, hx  up/down and left/right by PCCR: pupil centre minus the IR glints
+Calibration fits each direction with the glints, the iris or both, whichever
+fits best; while no glint is seen, the iris-only fit is used.
 
-HOW GAZE IS MEASURED
---------------------
-Each direction has two measurements:
-
-Iris (MediaPipe landmarks):
-  fx (left/right): where the iris sits between the corners of the eye.
-  iy (up/down): how far the iris centre sits above or below the line
-  between the two eye corners. The eye corners don't move when the eye
-  or the eyelids move, so both follow the eye.
-
-Glints, Pupil-Center Corneal Reflection (PCCR):
-  vy (up/down) and hx (left/right): the distance from the glints to the
-  pupil. The two IR LEDs make small bright reflections ("glints") on the
-  cornea. When the eye rotates, the PUPIL moves but the GLINTS stay
-  almost still, so the glint-to-pupil distance measures where the eye is
-  looking. The pupil and glints are found in the full-size picture, to a
-  fraction of a pixel.
-
-Calibration tries, for each direction, the glints, the iris and both
-together, and uses whichever fits the calibration dots best. If the
-chosen fit needs the glints and none is visible for a moment, the
-iris-only fit takes over until they return.
-
-On a laptop webcam there are no IR glints, so vy and hx are None; the
-iris measurements still work, and up/down falls back to the mouse if
-iy doesn't fit well enough.
+Main calls: start(), add_calibration_point(), fit_calibration(),
+get_screen_x(), get_screen_y().
 """
 
 import logging
@@ -53,10 +24,7 @@ import mediapipe as mp
 from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision as mp_vision
 
-# Both camera backends are optional: the laptop has OpenCV but no
-# picamera2, the Pi has picamera2 (and OpenCV is unnecessary there).
-# Importing them defensively means the same file runs on both machines
-# with no edits -- see _open_camera() below for the selection logic.
+# Camera libraries: OpenCV on a laptop, picamera2 on the Pi (see _open_camera).
 try:
     import cv2
 except ImportError:
@@ -64,7 +32,7 @@ except ImportError:
 
 try:
     from picamera2 import Picamera2
-    from libcamera import controls as libcamera_controls  # names for camera settings (autofocus mode)
+    from libcamera import controls as libcamera_controls  # autofocus mode names
 except ImportError:
     Picamera2 = None
 
@@ -74,307 +42,129 @@ MODEL_URL = (
     "face_landmarker/float16/1/face_landmarker.task"
 )
 
-# --- Raspberry Pi camera settings -----------------------------------
-# Camera: Raspberry Pi Camera Module 3 NoIR (sensor imx708_noir).
-# Unlike the earlier Arducam OV9281, Raspberry Pi ships a tuning file
-# for this camera, so automatic exposure works and no manual shutter or
-# gain values are needed. Exposure adapts on its own when the room
-# lighting changes or the IR LEDs are on.
-#
-# FOCUS: the lens never moves during tracking (it would "hunt"), but
-# where it should sit depends on how far away the user sits, so the
-# app finds it itself whenever the calibration screen opens and when
-# Start is pressed (FOCUS_ON_EYES): it moves the lens step by step
-# through FOCUS_LENS_POSITIONS, measures how sharp the EYES are at each
-# step (see _eye_sharpness), goes back to the sharpest step and then
-# tries FOCUS_FINE_STEP either side of it. Lens positions are in
-# dioptres (1 / distance in metres, for visible light).
-#
-# Why not the camera's own autofocus: on 9 November it focused once on
-# the wrong part of the picture (the eyes were near the bottom of the
-# picture) and the eyes came out blurry, with the up/down accuracy and
-# the shaking about twice as bad as in the sharp calibration right after.
-# Also, the IR light (850 nm) focuses behind visible light, so the lens
-# position that is sharp for the eyes in IR is not the one for the real
-# distance: on 9 November the eyes were sharp at 4.27 dioptres ("23 cm")
-# while the face was about 55 cm from the camera. That is also why the
-# old fixed focus (2.5 dioptres, "40 cm") gave blurry eyes.
-#
-# PI_LENS_POSITION is where the lens starts (the sharp position found on
-# 9 November). Set FOCUS_ON_EYES to False to keep it there.
+# --- Raspberry Pi camera (Camera Module 3 NoIR) ---
+# Automatic exposure. The lens stays fixed while tracking; FOCUS_ON_EYES finds
+# the position where the eyes are sharpest (in dioptres) when calibration starts.
+# The camera's own autofocus was not used: it focused on the wrong area, and
+# IR light focuses at a different position than visible light.
 PI_LENS_POSITION = 4.25
 FOCUS_ON_EYES = True
 FOCUS_LENS_POSITIONS = [2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0]
 FOCUS_FINE_STEP = 0.125
-# After the lens is told to move, pictures are thrown away until the
-# camera reports the new lens position (at most FOCUS_MAX_WAIT_PICTURES;
-# FOCUS_SETTLE_PICTURES if it doesn't report it), plus one more while
-# the lens settles; then the sharpness is measured.
+# Pictures to skip while the lens moves, before measuring sharpness.
 FOCUS_MAX_WAIT_PICTURES = 10
 FOCUS_SETTLE_PICTURES = 3
-# The camera lens's focal length (mm), for working out the distance to
-# the face from the iris size in the picture (see get_face_distance_cm).
-# Camera Module 3: 4.74; Camera Module 3 Wide: 2.75 (set automatically
-# when the camera reports a "wide" sensor name).
+# Lens focal length in mm, for the face distance (Module 3 Wide: 2.75, set automatically).
 PI_LENS_FOCAL_MM = 4.74
-PI_SENSOR_PIXEL_MM = 0.0014   # the sensor's pixel size (1.4 micrometres)
-IRIS_DIAMETER_MM = 11.7       # nearly the same in all adults
-# Set this to True only if the camera is mounted upside down, i.e. if
-# the app's preview shows your face upside down. read() then turns the
-# picture the right way up first, because MediaPipe is made for upright
-# faces.
+PI_SENSOR_PIXEL_MM = 0.0014  # 1.4 micrometres
+IRIS_DIAMETER_MM = 11.7  # about the same in all adults
+# True only if the camera is mounted upside down (the preview shows the face upside down).
 PI_CAMERA_UPSIDE_DOWN = False
-# The Pi captures at 1536x864, the sensor's own full-view mode. The
-# glints are only a few pixels wide, so the eyes need this detail.
-# MediaPipe gets a half-size copy (768x432, every 2nd pixel), because it
-# doesn't need the detail and a smaller picture keeps it fast.
+# Full-view mode; the eyes need the detail. MediaPipe gets a half-size copy.
 CAPTURE_WIDTH, CAPTURE_HEIGHT = 1536, 864
-PI_MEDIAPIPE_STEP = 2   # use every 2nd pixel for MediaPipe
+PI_MEDIAPIPE_STEP = 2  # MediaPipe uses every 2nd pixel
 
-# Landmark indices, confirmed directly from MediaPipe's own connection
-# graph -- see gaze_test.py for how these were verified.
+# MediaPipe landmark numbers (checked in gaze_test.py).
 RIGHT_IRIS_CENTER = 468
 LEFT_IRIS_CENTER = 473
-RIGHT_IRIS_EDGE = [469, 470, 471, 472]   # 4 points on the edge of the iris
+RIGHT_IRIS_EDGE = [469, 470, 471, 472]  # 4 points on the iris edge
 LEFT_IRIS_EDGE = [474, 475, 476, 477]
-RIGHT_EYE_CORNERS = (33, 133)            # outer and inner corner
+RIGHT_EYE_CORNERS = (33, 133)  # outer and inner corner
 LEFT_EYE_CORNERS = (362, 263)
 RIGHT_EYE_CONTOUR = [7, 33, 133, 144, 145, 153, 154, 155, 157, 158, 159, 160, 161, 163, 173, 246]
 LEFT_EYE_CONTOUR = [249, 263, 362, 373, 374, 380, 381, 382, 384, 385, 386, 387, 388, 390, 398, 466]
-RIGHT_EYE_LIDS = (159, 145)              # middle of the upper and lower eyelid
+RIGHT_EYE_LIDS = (159, 145)  # middle of the upper and lower eyelid
 LEFT_EYE_LIDS = (386, 374)
 
-# --- PCCR (glint) settings -------------------------------------------
-# A glint is a small bright reflection of an IR LED on the cornea. Pixels
-# at least GLINT_MIN_BRIGHTNESS bright are grouped into spots of touching
-# pixels, and a spot only counts as a glint if it is small: at most
-# GLINT_MAX_AREA of the iris's area. Bigger bright patches are skin, the
-# wet edge of the eyelid or glasses, not an LED reflection.
+# --- PCCR (glints) ---
+# A glint is the IR LED's reflection on the cornea: a small spot at least
+# GLINT_MIN_BRIGHTNESS bright and at most GLINT_MAX_AREA of the iris's area.
 GLINT_MIN_BRIGHTNESS = 200   # 0 = black, 255 = white
-GLINT_MAX_AREA = 0.1         # 10% of the iris
-# A glint is a bright dot on the darker iris or pupil, so it must also be
-# at least GLINT_MIN_CONTRAST brighter than the pixels around it (up to
-# 2 pixels away). The skin of the upper eyelid is often just as bright
-# as a glint under IR, and the top of the search circle reaches it; but
-# a bit of skin is about as bright as the skin around it. In the eye
-# close-ups from the Pi on 2 November, the real glints were 40 to 68
-# brighter than their surroundings and the eyelid-skin spots only 2 to
-# 15, and before this check those skin spots were taken for glints.
+GLINT_MAX_AREA = 0.1  # share of the iris's area
+# A glint must also be this much brighter than the pixels around it (eyelid skin is not).
 GLINT_MIN_CONTRAST = 25
-# The two IR boards make two glints per eye, always the same distance
-# apart (the head rests on a support). Once that gap is known, two spots
-# only count as the LED pair if their gap is within GLINT_GAP_TOLERANCE
-# of it, so a stray reflection (a lamp, the wet eyelid edge) is not
-# paired with an LED glint. When only one LED glint is found, the
-# middle of the pair worked out from it must be within GLINT_JUMP_LIMIT
-# of where the middle was last time. Both are fractions of the iris
-# radius (about 2.5 and 5 pixels at 40 cm).
+# The two LED glints keep the same gap; a pair must match it within
+# GLINT_GAP_TOLERANCE, and a single glint must be within GLINT_JUMP_LIMIT of the
+# last middle (both as shares of the iris radius).
 GLINT_GAP_TOLERANCE = 0.1
 GLINT_JUMP_LIMIT = 0.2
-# The pupil is the dark disc in the middle of the iris (the IR LEDs are
-# beside the camera, not on its axis, so the pupil looks dark).
-# find_pupil() compares each pixel near MediaPipe's iris centre with two
-# levels: the pupil's darkness (the darkest pixels within
-# PUPIL_MIDDLE_SCALE of the iris radius) and the iris's brightness (the
-# ring PUPIL_RING of the iris radius). A pixel darker than the halfway
-# level counts as pupil; near that level it counts partly, which places
-# the pupil centre to a fraction of a pixel. Only pixels within
-# PUPIL_MAX_SIZE of the iris radius count, so eyelashes and the eyelid
-# shadow at the iris edge are left out. There is no pupil (None) if it
-# isn't at least PUPIL_MIN_CONTRAST darker than the iris.
+# Pupil (the dark disc in the iris), found by find_pupil(). Sizes are shares of
+# the iris radius.
 PUPIL_MIDDLE_SCALE = 0.5
 PUPIL_RING = (0.75, 0.95)
 PUPIL_MAX_SIZE = 0.65
 PUPIL_MIN_CONTRAST = 15
-# Glints sit on the pupil and would pull its centre away; pixels at
-# least PUPIL_GLINT_CONTRAST brighter than the iris are painted over
-# with the pixels around them first (see _remove_glints).
+# Glints brighter than the iris by this much are painted over before finding the pupil.
 PUPIL_GLINT_CONTRAST = 20
-# USE_PUPIL: measure the eyes' left/right (fx) and up/down (iy) position
-# with the pupil centre found in the camera picture, instead of
-# MediaPipe's iris centre. MediaPipe estimates the iris from a small,
-# shrunk copy of the face, so it is only good to about a pixel. On the
-# sharp eye pictures of 9 November, fitted to the 15 dots, the pupil was
-# off by 0.9 cm left/right and 0.6 cm up/down on average, MediaPipe's
-# iris by 1.3 and 1.0 cm. (On blurry pictures both were the same, which
-# is one more reason for FOCUS_ON_EYES.) If the pupil isn't found in a
-# picture, MediaPipe's iris centre is used, moved by the usual distance
-# between the two, so the pointer doesn't jump. Only with the Pi's IR
-# camera: a normal webcam doesn't show the pupil clearly.
+# Use the pupil centre found in the picture for fx and iy, instead of MediaPipe's
+# iris centre (more accurate on sharp IR pictures). Falls back to MediaPipe if
+# the pupil isn't found.
 USE_PUPIL = True
-# Glints are searched for only near the pupil, within GLINT_SEARCH_SCALE
-# of the iris radius: while the user looks at the screen, an LED near
-# the camera always reflects close to the pupil, and the shiny edge of
-# the eyelid is further out.
+# Glints are searched for only this close to the pupil (share of the iris radius).
 GLINT_SEARCH_SCALE = 0.75
-# If a measurement is missing (a blink, a glint not found), its last
-# value is kept for a short time, then reported as unknown: the iris for
-# up to IRIS_HOLD_TIME, long enough to ride out a blink, and the glints
-# for only GLINT_HOLD_TIME. A kept glint value is out of date, and a fit
-# that uses the glints then holds the pointer partly where the eyes were
-# looking before; when the glints are lost, it is better to switch to
-# the iris backup fit quickly. (The old limit was 15 pictures: 1 second
-# at 15 pictures a second, but 2.5 seconds at the 6 pictures a second
-# measured on 30 October, when the pointer was still partly at the
-# previous dot at every accuracy-test dot.)
+# A missing measurement keeps its last value this long (rides out a blink),
+# then counts as unknown. Glints are dropped sooner so the iris fit takes over.
 IRIS_HOLD_TIME = 1.0    # seconds
 GLINT_HOLD_TIME = 0.3   # seconds
-# The remembered gap between the two glints (see _Eye) is forgotten
-# after this many pictures in a row without the pair.
+# Pictures without the glint pair before its gap is forgotten.
 MAX_MISSED_FRAMES = 15
-# When only one glint is visible, it is only used if it is near where
-# the glints were in the last picture (GLINT_JUMP_LIMIT). If the head
-# moved while the glints were hidden (a blink, the face lost for a
-# moment), the glint is never near that old place again, and before
-# 2 November every glint after that was thrown away: the calibration
-# screen said "no IR glints" although the white glint dots were
-# showing. Now the old place is forgotten after this many pictures in
-# a row in which the glints were thrown away, and the glint nearest
-# the pupil is taken again.
+# Pictures in a row with rejected glints before the glints' last place is forgotten.
 GLINT_RESTART_FRAMES = 3
 
-# --- Blinks ----------------------------------------------------------
-# During a blink the iris is hidden and MediaPipe only guesses where it
-# is (usually too low), which would pull the pointer down. Each frame,
-# the eye's openness (gap between the eyelids / eye width) is compared
-# with its usual openness (the median of the last OPENNESS_HISTORY
-# frames, about 2 seconds); below BLINK_OPENNESS of that, the frame is a
-# blink and the last measurements are kept. Looking down at the bottom
-# of the screen also narrows the eyes, so a blink must be a deep closing
-# (BLINK_OPENNESS), and short: a blink lasts at most about 0.4 seconds
-# (BLINK_MAX_FRAMES), so eyes that stay narrow longer than that are
-# looking down, and are measured as usual.
+# --- Blinks ---
+# A blink: the eyes much less open than usual (BLINK_OPENNESS), for at most
+# BLINK_MAX_FRAMES. The last measurements are kept during a blink.
 BLINK_OPENNESS = 0.35
 BLINK_MAX_FRAMES = 5
 OPENNESS_HISTORY = 30
 
-# Exponential-moving-average smoothing applied to the raw gaze feature
-# before it's used for prediction. Without this, tiny frame-to-frame
-# landmark noise gets hugely amplified once mapped across the screen
-# width (the calibrated eye-movement range is much smaller than the
-# screen, so the regression's "gain" is high). Lower alpha = smoother
-# but more lag; higher alpha = snappier but jumpier. Tune this once
-# testing with real users -- worth documenting the chosen value and why,
-# same as your dwell-time threshold.
-# The smoothing is set in seconds (SMOOTHING_TIME): each new reading
-# counts more the longer it has been since the last one. It used to be a
-# fixed share per picture (0.25), so at fewer pictures a second the
-# pointer trailed behind the eyes for longer: about 1.3 s at 9 pictures
-# a second, but 2.4 s at 5 and 4 s at 3. The calibration dots were then
-# partly measured while the readings were still on their way from the
-# previous dot. 0.4 s is what 0.25 per picture gave at 9 pictures a second.
+# Smoothing of the gaze measurements, in seconds (same at any frame rate).
 SMOOTHING_TIME = 0.4    # seconds
-# The same kind of averaging, per picture, for things the eyes remember
-# (see _Eye: where the pupil usually is, the gap between the glints).
+# Per-picture averaging for what the eyes remember (pupil offset, glint gap).
 SMOOTHING_ALPHA = 0.25
 
-# LOW POWER, while the app shows its resting screen (main.py, REST_AFTER):
-# only this many camera pictures a second are processed, instead of as
-# many as the Pi can (about 9). MediaPipe takes most of the processor's
-# time, so this cuts the work, the heat and the power used to about a
-# third. The resting screen only needs the gaze for its one big Start
-# button, which still works at this rate.
-LOW_POWER_FPS = 3.0     # pictures a second
+# Resting screen: process only this many pictures a second.
+LOW_POWER_FPS = 3.0  # pictures a second
 
-# After calibration, each axis is only used if a straight line fits the
-# calibration points well. R squared (0 to 1) measures that fit: 1 means
-# the eye measurements line up perfectly with the dot positions, 0
-# means no relationship at all. Below this value that axis falls back to
-# the mouse, so a bad calibration can't make the pointer jump around.
+# A direction is used only if its calibration fit has at least this R squared.
 MIN_FIT_R2 = 0.6
 
-# --- Distance correction ---------------------------------------------
-# Calibration is done at one distance from the screen. If the user later
-# sits farther away, the screen looks smaller from where they are, so
-# their eyes turn less to reach its edges and the pointer would be
-# pulled toward the middle (closer: pushed outward). The face's size in
-# the picture shows the distance -- twice as far looks half as big -- so
-# the pointer's distance from the middle of the calibration dots is
-# multiplied by
-#     face size during calibration / face size now
-# which equals  distance now / distance during calibration.
-# The face size is the distance between the two OUTER eye corners
-# (stable landmarks, about 9 cm apart on an adult face). The correction
-# assumes the user faces the middle of the screen.
+# --- Distance correction ---
+# If the user sits nearer or farther than during calibration, the pointer is
+# scaled around the middle by the face size (outer eye corners) then and now.
 FACE_SIZE_CORNERS = (33, 263)
-# The correction is kept within this range, so one bad face reading
-# can't throw the pointer across the screen.
+# Limits of that scale.
 DISTANCE_SCALE_LIMITS = (0.7, 1.4)
 
-# --- Head movement correction ------------------------------------------
-# fx and iy say where the eye points INSIDE the head. When the head turns
-# or moves after calibration, the same eye position points somewhere else
-# on the screen, so the pointer drifts away from where the user looks
-# (seen in every accuracy test on 29-30 October, and noticed by the
-# team). So the head's pose is measured in every picture, and the pointer
-# is moved by as much as the head's change since calibration moves the
-# gaze on the screen:
-#     head turned or tilted by an angle:  viewing distance x tan(angle)
-#     head moved sideways or up/down:     the same distance
-# The angles come from MediaPipe's 3D landmarks (see _head_pose); the
-# position is the middle of the outer eye corners, converted to cm with
-# EYE_CORNER_DISTANCE_CM. The user never has to move their head: this
-# only corrects movements that happen anyway. Set HEAD_CORRECTION to
-# False to compare with and without it.
-#
-# It is OFF: on the Pi's two real calibrations of 2-3 November, it made
-# the accuracy test worse. Recomputed from the saved readings, the
-# average error went from 2.0 to 3.5 cm (camera above the screen; the
-# head moved about 3 to 4 cm down during calibration) and from 1.7 to
-# 2.1 cm (camera below the screen). Probably the camera's view of the
-# eye already changes when the head moves, so the eye measurements
-# already follow part of the head's movement, and correcting it again
-# overdoes it. The head's pose is still measured and saved in the log.
+# --- Head movement correction ---
+# Moves the pointer by the head's turn and shift since calibration. Off: on the
+# real tests (2-3 November) it made the accuracy worse. The head pose is still
+# logged.
 HEAD_CORRECTION = False
-VIEWING_DISTANCE_CM = 40       # eyes to screen during calibration
-EYE_CORNER_DISTANCE_CM = 9.0   # typical adult distance between the outer eye corners
-# The screen, to turn centimetres into screen pixels and back. The Pi
-# sends SCREEN_RESOLUTION pixels to the 10.1-inch screen (1920 x 1080 is
-# the only choice it offers in Screen Configuration), and the screen
-# shows them on a picture area of SCREEN_WIDTH_CM x SCREEN_HEIGHT_CM,
-# measured with a ruler. The screen's own pixels are 1280 x 800, so the
-# picture is scaled to fit and is squeezed more across than up and down:
-# left/right and up/down need separate scales. (Until 2 November one
-# scale of 58.8 pixels per cm, for 1280 x 800, was used for both, which
-# made the accuracy test's centimetres about 1.5 times too big.)
+VIEWING_DISTANCE_CM = 40  # eyes to screen during calibration
+EYE_CORNER_DISTANCE_CM = 9.0  # outer eye corners, adult
+# The Pi sends 1920 x 1080 pixels to a 21.5 x 13.5 cm picture area, so
+# left/right and up/down have different pixels per cm.
 SCREEN_RESOLUTION = (1920, 1080)
-SCREEN_WIDTH_CM, SCREEN_HEIGHT_CM = 21.5, 13.5   # measured on 2 November
+SCREEN_WIDTH_CM, SCREEN_HEIGHT_CM = 21.5, 13.5  # measured with a ruler
 SCREEN_PX_PER_CM_X = SCREEN_RESOLUTION[0] / SCREEN_WIDTH_CM    # left/right
 SCREEN_PX_PER_CM_Y = SCREEN_RESOLUTION[1] / SCREEN_HEIGHT_CM   # up/down
-# Points on opposite sides of the face, used to measure how far the head
-# is turned (left and right points) and tilted (top and bottom points).
-# All of them stay in the picture when the camera is close and the chin
-# is cut off (as in the 30 October video). On those video frames the
-# pairs agreed closely (correlation 0.98 to 0.99), and the averaged
-# angles wobbled by only about 0.1 (turn) and 0.2 (tilt) degrees from
-# one picture to the next.
-TURN_PAIRS = [(33, 263), (234, 454), (61, 291)]   # outer eye corners, sides of the face, mouth corners
-TILT_PAIRS = [(10, 0), (168, 2), (9, 164)]        # top of the forehead / top of the nose / between the
-                                                  # eyebrows, each with a point between the nose and lips
-# The head moves slowly, and MediaPipe's depth is less steady than its
-# x and y, so the head's pose is smoothed more than the eye measurements.
-HEAD_SMOOTHING_TIME = 1.0   # seconds (was 0.1 per picture, about 1 s at 9 pictures a second)
+# Point pairs on opposite sides of the face, for the head's turn and tilt.
+TURN_PAIRS = [(33, 263), (234, 454), (61, 291)]  # eye corners, face sides, mouth corners
+TILT_PAIRS = [(10, 0), (168, 2), (9, 164)]  # top and bottom face points
+# The head pose is smoothed more (MediaPipe's depth is noisy).
+HEAD_SMOOTHING_TIME = 1.0  # seconds
 
 
-# picamera2 writes a DEBUG line for every camera job; they flooded the
-# terminal (12 November) and hid the app's own lines.
+# Hide picamera2's debug lines.
 logging.getLogger("picamera2").setLevel(logging.INFO)
-# MediaPipe uses an old protobuf call for every picture, and protobuf
-# printed a "SymbolDatabase.GetPrototype() is deprecated" warning about
-# it every few seconds. It is harmless (nothing to fix on our side), so
-# it is hidden to keep the terminal readable.
+# Hide a harmless protobuf warning MediaPipe causes on every picture.
 warnings.filterwarnings("ignore", message=r"SymbolDatabase\.GetPrototype\(\) is deprecated")
 
 
 def _pi_health():
-    """The Pi's processor temperature and whether the Pi is slowing itself
-    down, read from the files its system keeps (cheap, a few times a
-    minute). Returns (temperature in °C or None, reason or None). A Pi
-    slows its processor down when its power supply gives too little
-    voltage ("under-voltage": a weak adapter or cable, or too much drawn
-    from its pins), or when it gets too hot (about 80 °C). MediaPipe and
-    the eye measurements then take up to twice as long or more, so there
-    are fewer pictures a second. (None, None) on other computers."""
+    """The Pi's temperature and why it is slowing down (under-voltage or heat), as (degrees C or
+    None, reason or None)."""
     temperature = None
     try:
         with open("/sys/class/thermal/thermal_zone0/temp") as f:
@@ -386,9 +176,9 @@ def _pi_health():
         with open("/sys/devices/platform/soc/soc:firmware/get_throttled") as f:
             flags = int(f.read().strip(), 16)
     except (OSError, ValueError):
-        try:   # older systems: ask the firmware with the vcgencmd tool
+        try:  # older systems: vcgencmd
             answer = subprocess.run(["vcgencmd", "get_throttled"], capture_output=True,
-                                    text=True, timeout=2).stdout   # "throttled=0x50005"
+                                    text=True, timeout=2).stdout  # "throttled=0x50005"
             flags = int(answer.strip().split("=")[1], 16)
         except (OSError, ValueError, IndexError, subprocess.SubprocessError):
             pass
@@ -412,9 +202,7 @@ def _ensure_model_downloaded():
 
 
 def _normalized_iris_position(landmarks, iris_idx, contour_indices, w, h, centre=None):
-    """Where the iris centre (or `centre`, in pixels, if given) is within
-    the eye's outline: (0, 0) = top left of the outline, (1, 1) = bottom
-    right."""
+    """Iris centre (or centre) within the eye's outline: (0, 0) top left, (1, 1) bottom right."""
     xs = [landmarks[i].x * w for i in contour_indices]
     ys = [landmarks[i].y * h for i in contour_indices]
     min_x, max_x = min(xs), max(xs)
@@ -430,10 +218,7 @@ def _normalized_iris_position(landmarks, iris_idx, contour_indices, w, h, centre
 
 
 def _compute_horizontal_feature(landmarks, w, h, centres=None):
-    """fx: the iris position between the eye corners, averaged over both
-    eyes. 0 = iris at one corner, 1 = at the other. `centres`, if given,
-    are the (right, left) eye centres to use instead of MediaPipe's iris
-    centres, in pixels of a w x h picture (see USE_PUPIL)."""
+    """fx: the iris (or pupil) position between the eye corners, averaged over both eyes."""
     right, left = centres if centres is not None else (None, None)
     rfx, _ = _normalized_iris_position(landmarks, RIGHT_IRIS_CENTER, RIGHT_EYE_CONTOUR, w, h, right)
     lfx, _ = _normalized_iris_position(landmarks, LEFT_IRIS_CENTER, LEFT_EYE_CONTOUR, w, h, left)
@@ -441,15 +226,13 @@ def _compute_horizontal_feature(landmarks, w, h, centres=None):
 
 
 def _face_size(landmarks, w, h):
-    """Distance in pixels between the two outer eye corners: the face's
-    size in the picture, used for the distance correction."""
+    """Distance in pixels between the outer eye corners (the face's size)."""
     a, b = landmarks[FACE_SIZE_CORNERS[0]], landmarks[FACE_SIZE_CORNERS[1]]
     return float(np.hypot((a.x - b.x) * w, (a.y - b.y) * h))
 
 
 def _iris_diameter(landmarks, w, h):
-    """The irises' diameter in pixels of a w x h picture, averaged over
-    both eyes (for the distance estimate, see get_face_distance_cm)."""
+    """Iris diameter in pixels, averaged over both eyes."""
     total = 0.0
     for centre, edge in ((RIGHT_IRIS_CENTER, RIGHT_IRIS_EDGE), (LEFT_IRIS_CENTER, LEFT_IRIS_EDGE)):
         c = landmarks[centre]
@@ -459,8 +242,7 @@ def _iris_diameter(landmarks, w, h):
 
 
 def _eye_boxes(landmarks, w, h):
-    """Boxes (x0, y0, x1, y1) around the two eyes in a w x h picture: each
-    eye's outline with 5 pixels to spare (see _eye_sharpness)."""
+    """Boxes (x0, y0, x1, y1) around the two eyes."""
     boxes = []
     for contour in (RIGHT_EYE_CONTOUR, LEFT_EYE_CONTOUR):
         xs = [landmarks[i].x * w for i in contour]
@@ -471,12 +253,8 @@ def _eye_boxes(landmarks, w, h):
 
 
 def _eye_sharpness(frame, boxes):
-    """How sharp the eyes are in a picture (see FOCUS_ON_EYES): the
-    average squared brightness difference between neighbouring pixels in
-    the boxes around the eyes, divided by the squared average brightness
-    so that it doesn't change with the exposure. Blur smooths out those
-    differences (the edges of the pupil, iris, eyelids and lashes). 0 if
-    there is no picture."""
+    """How sharp the eyes are: brightness differences between neighbouring pixels, independent of
+    exposure."""
     if frame is None:
         return 0.0
     total = 0.0
@@ -492,13 +270,8 @@ def _eye_sharpness(frame, boxes):
 
 
 def _compute_iris_height(landmarks, w, h, centres=None):
-    """iy: how far the iris centre sits below the line between the two
-    eye corners, divided by the eye's width, averaged over both eyes
-    (bigger = looking further down). The corners stay put when the eye
-    or the eyelids move, so this follows the eye itself. (The old method
-    measured the iris against the eyelids instead, and failed because
-    the eyelids move up and down together with the eye.) `centres`: as
-    for _compute_horizontal_feature."""
+    """iy: how far the iris (or pupil) sits below the line between the eye corners, divided by the
+    eye's width, averaged over both eyes."""
     total = 0.0
     for iris_idx, (c1, c2), centre in zip((RIGHT_IRIS_CENTER, LEFT_IRIS_CENTER),
                                           (RIGHT_EYE_CORNERS, LEFT_EYE_CORNERS),
@@ -506,48 +279,32 @@ def _compute_iris_height(landmarks, w, h, centres=None):
         a, b = landmarks[c1], landmarks[c2]
         iris_y = landmarks[iris_idx].y * h if centre is None else centre[1]
         eye_width = abs(b.x - a.x) * w
-        corner_y = (a.y + b.y) / 2 * h          # height of the line between the corners
+        corner_y = (a.y + b.y) / 2 * h  # height of the line between the corners
         if eye_width > 0:
             total += (iris_y - corner_y) / eye_width
     return total / 2
 
 
 def _head_pose(landmarks, w, h):
-    """The head's pose in a picture of size w x h, as (turn, tilt, x, y):
-        turn: how far the head is turned to the right (radians)
-        tilt: how far the head is tilted down (radians)
-        x, y: the middle of the two outer eye corners (picture pixels)
-    MediaPipe gives every landmark a depth z (smaller = closer to the
-    camera) in the same units as x. Two points on opposite sides of the
-    face are at the same depth when the face looks straight at the
-    camera. When the head turns right, its right side moves away from
-    the camera, and atan(depth difference / distance between the points)
-    is the angle it turned; the same with top and bottom points for the
-    tilt. Each angle is the average over several pairs (TURN_PAIRS,
-    TILT_PAIRS). The picture is mirrored, so the picture's right is the
-    user's right, which is also the screen's right."""
+    """Head pose (turn, tilt, x, y): turn and tilt in radians from the depth difference of point
+    pairs, x, y the middle of the outer eye corners in pixels."""
     def point(i):
         return landmarks[i].x * w, landmarks[i].y * h, landmarks[i].z * w
 
     turns = []
     for a, b in TURN_PAIRS:
-        (ax, _, az), (bx, _, bz) = sorted([point(a), point(b)])   # left point first
+        (ax, _, az), (bx, _, bz) = sorted([point(a), point(b)])  # left point first
         turns.append(np.arctan2(bz - az, bx - ax))
     tilts = []
     for a, b in TILT_PAIRS:
-        (_, ay, az), (_, by, bz) = sorted([point(a), point(b)], key=lambda p: p[1])   # top point first
+        (_, ay, az), (_, by, bz) = sorted([point(a), point(b)], key=lambda p: p[1])  # top point first
         tilts.append(np.arctan2(bz - az, by - ay))
     (ax, ay, _), (bx, by, _) = point(FACE_SIZE_CORNERS[0]), point(FACE_SIZE_CORNERS[1])
     return float(np.mean(turns)), float(np.mean(tilts)), (ax + bx) / 2, (ay + by) / 2
 
 
 def _head_shift(pose, reference, face_size, distance_cm):
-    """How far the gaze has moved on the screen because the head turned or
-    moved from the `reference` pose to `pose` (see HEAD_CORRECTION and
-    _head_pose), as (x, y) in screen pixels, y upwards as in Kivy.
-    face_size: the outer eye corners' distance now in picture pixels (to
-    turn picture pixels into cm); distance_cm: the eyes' distance from
-    the screen now."""
+    """Screen shift (x, y) of the gaze caused by the head's change from reference to pose."""
     turn, tilt, x, y = pose
     turn0, tilt0, x0, y0 = reference
     cm_per_pixel = EYE_CORNER_DISTANCE_CM / face_size
@@ -557,9 +314,7 @@ def _head_shift(pose, reference, face_size, distance_cm):
 
 
 def _crop_square(image, cx, cy, radius):
-    """Cuts a square of side 2*radius centred on (cx, cy) out of `image`,
-    clipped at the image edges. Returns the crop and the position of its
-    top-left corner in the full image."""
+    """Square crop of side 2*radius around (cx, cy); returns the crop and its corner."""
     h, w = image.shape[:2]
     x0, x1 = max(0, int(cx - radius)), min(w, int(cx + radius) + 1)
     y0, y1 = max(0, int(cy - radius)), min(h, int(cy + radius) + 1)
@@ -567,28 +322,9 @@ def _crop_square(image, cx, cy, radius):
 
 
 def find_glints(gray, cx, cy, radius, max_area):
-    """Finds the IR glints inside the circle of `radius` around the pupil
-    centre (cx, cy).
-
-    1. Only pixels inside the circle are searched, so bright spots
-       further out (eyelid skin, the wet edge of the lower eyelid) are
-       not taken for glints.
-    2. Pixels at least GLINT_MIN_BRIGHTNESS bright are grouped into
-       spots of touching pixels.
-    3. Spots bigger than `max_area` pixels are not LED reflections and
-       are dropped.
-    4. Spots that are not clearly brighter than the pixels around them
-       (GLINT_MIN_CONTRAST) are bits of bright skin, and are dropped.
-    5. Each spot's centre is the average of its pixel positions, weighted
-       by how bright each pixel is. This places the centre to a fraction
-       of a pixel, which matters because looking from the top to the
-       bottom of the screen moves the pupil only a few pixels.
-
-    Returns a list of glint centres (x, y), one per glint, in the
-    coordinates of `gray`. An empty list means no glint (IR LEDs off).
-    """
-    # 3 pixels more than the circle, so that spots at its edge have
-    # pixels around them for step 4.
+    """Finds the IR glints within radius of the pupil centre: small, bright spots that stand out
+    from their surroundings. Returns their centres (x, y), brightness-weighted."""
+    # 3 extra pixels so spots at the edge have surroundings.
     crop, x0, y0 = _crop_square(gray, cx, cy, radius + 3)
     if crop.size == 0:
         return []
@@ -598,16 +334,16 @@ def find_glints(gray, cx, cy, radius, max_area):
     glints = []
     for spot in _group_touching(bright):
         if len(spot) > max_area:
-            continue  # too big to be an LED reflection
+            continue  # too big for an LED reflection
         ys = np.array([pixel[0] for pixel in spot])
         xs = np.array([pixel[1] for pixel in spot])
-        # The pixels up to 2 away from the spot, not in it.
+        # Pixels up to 2 away from the spot.
         in_spot = np.zeros(crop.shape, dtype=bool)
         in_spot[ys, xs] = True
         around = (_neighbourhood(in_spot, 2, "max") > 0) & ~in_spot
         if crop[ys, xs].max() - crop[around].mean() < GLINT_MIN_CONTRAST:
-            continue  # no brighter than its surroundings: skin, not an LED reflection
-        # Brighter pixels count more; the dimmest allowed pixel counts 1.
+            continue  # not brighter than its surroundings: skin
+        # Brighter pixels count more.
         weights = crop[ys, xs].astype(float) - GLINT_MIN_BRIGHTNESS + 1
         glints.append((x0 + np.average(xs, weights=weights),
                        y0 + np.average(ys, weights=weights)))
@@ -615,18 +351,16 @@ def find_glints(gray, cx, cy, radius, max_area):
 
 
 def _group_touching(mask):
-    """Groups the True pixels of `mask` into spots of touching pixels
-    (diagonal neighbours count as touching). Returns a list of spots,
-    each a list of (row, column) pixels."""
+    """Groups True pixels into spots of touching pixels (diagonals count)."""
     remaining = set(zip(*np.nonzero(mask)))
     spots = []
     while remaining:
-        to_visit = [remaining.pop()]  # start a new spot from any leftover pixel
+        to_visit = [remaining.pop()]  # start a new spot
         spot = []
         while to_visit:
             row, col = to_visit.pop()
             spot.append((row, col))
-            # Add its bright neighbours to the same spot.
+            # Add bright neighbours to the spot.
             for d_row in (-1, 0, 1):
                 for d_col in (-1, 0, 1):
                     neighbour = (row + d_row, col + d_col)
@@ -638,14 +372,8 @@ def _group_touching(mask):
 
 
 def _neighbourhood(image, size, combine):
-    """Combines each pixel with the (2*size+1) x (2*size+1) square around
-    it. combine="mean" blurs (removes single-pixel noise), "min" takes the
-    darkest neighbour, "max" the brightest.
-
-    With OpenCV (installed on the Pi together with MediaPipe), its own
-    filters do this, many times faster than the numpy version below, which
-    is kept for computers without OpenCV. Both repeat the edge pixels
-    outwards, so they give the same result."""
+    """Combines each pixel with the square around it: "mean", "min" or "max" (OpenCV if
+    available)."""
     if cv2 is not None:
         image = image.astype(np.float32)
         square = (2 * size + 1, 2 * size + 1)
@@ -667,25 +395,18 @@ def _neighbourhood(image, size, combine):
 
 
 def _remove_glints(crop, limit, where=None):
-    """Paints over the glints (pixels brighter than `limit`; only those
-    where `where` is True, if given), working inwards from their edges.
-
-    A glint often sits ON the pupil. Left alone, it would punch a bright
-    hole in the pupil and pull the pupil centre away. Each round, every
-    glint pixel that touches a non-glint pixel takes the darkest of those
-    neighbours, so a glint on the pupil becomes pupil-dark and a glint on
-    the iris becomes iris-coloured.
-    """
+    """Paints over glints (pixels brighter than limit) with their darkest neighbours, from the
+    edges in."""
     bright = crop > limit
     if where is not None:
         bright &= where
-    # Glint pixels, plus 1 pixel of glow around them.
+    # Glint pixels plus 1 pixel around them.
     glint = _neighbourhood(bright, 1, "max") > 0
     result = crop.astype(float)
-    for _ in range(10):  # 10 rounds fills glints up to 20 pixels across
+    for _ in range(10):  # fills glints up to 20 pixels across
         if not glint.any():
             break
-        # Darkest NON-glint neighbour of every pixel (glint pixels count as white).
+        # Darkest non-glint neighbour of every pixel.
         darkest_neighbour = _neighbourhood(np.where(glint, 255, result), 1, "min")
         edge = glint & (darkest_neighbour < 255)  # glint pixels next to a non-glint pixel
         result[edge] = darkest_neighbour[edge]
@@ -694,34 +415,13 @@ def _remove_glints(crop, limit, where=None):
 
 
 def find_pupil(gray, cx, cy, iris_radius):
-    """Finds the pupil centre near MediaPipe's iris centre (cx, cy) in a
-    grayscale image (see PUPIL_MIDDLE_SCALE and the settings after it).
-
-    1. The iris's brightness: the middle (median) brightness of the ring
-       PUPIL_RING around the iris centre.
-    2. Glints (pixels much brighter than the iris) are painted over, and
-       the area is blurred slightly to remove noise.
-    3. The pupil's darkness: the darkest pixels (5%) in the middle of
-       the iris, within PUPIL_MIDDLE_SCALE of the iris radius.
-    4. Each pixel within PUPIL_MAX_SIZE of the iris radius gets a weight:
-       1 if it is clearly as dark as the pupil, 0 if it is clearly as
-       bright as the iris, and in between near the halfway level, i.e.
-       on the pupil's edge.
-    5. The pupil centre is the weighted average position of those pixels.
-
-    The half-counted edge pixels are what place the centre to a fraction
-    of a pixel. (The old version took the pixels near the darkest point,
-    which is often at the pupil's top, under the eyelashes' shadow or
-    next to a glint, and so put the centre too high.)
-
-    Returns (x, y) in the coordinates of `gray`, or None if no pupil is
-    seen (eye at the picture's edge, or no dark pupil: see
-    PUPIL_MIN_CONTRAST).
-    """
+    """Finds the pupil centre near the iris centre (cx, cy): pixels as dark as the pupil count
+    fully, pixels on its edge partly, and the centre is their weighted average. None if no dark
+    pupil is seen."""
     radius = iris_radius
     crop, x0, y0 = _crop_square(gray, cx, cy, radius + 2)
     if crop.shape[0] < 2 * radius or crop.shape[1] < 2 * radius:
-        return None  # part of the eye is outside the picture
+        return None  # eye partly outside the picture
     rows, cols = np.ogrid[:crop.shape[0], :crop.shape[1]]
     distance_sq = (cols + x0 - cx) ** 2 + (rows + y0 - cy) ** 2
     ring = ((distance_sq >= (PUPIL_RING[0] * radius) ** 2)
@@ -730,9 +430,7 @@ def find_pupil(gray, cx, cy, iris_radius):
     if not ring.any() or not middle.any():
         return None
 
-    # Steps 1-3. Only glints that can touch the pupil area are painted
-    # over (painting the bright skin and eye white further out would only
-    # cost time: those pixels don't count anyway).
+    # Steps 1-3: iris brightness, paint over glints, pupil darkness.
     glint_limit = np.median(crop[ring]) + PUPIL_GLINT_CONTRAST
     near_pupil = distance_sq <= (PUPIL_MAX_SIZE * radius + 2) ** 2
     smooth = _neighbourhood(_remove_glints(crop, glint_limit, near_pupil), 1, "mean")
@@ -741,21 +439,18 @@ def find_pupil(gray, cx, cy, iris_radius):
     if iris - pupil < PUPIL_MIN_CONTRAST:
         return None
 
-    # Step 4: 1 below a quarter of the way from the pupil's darkness to
-    # the iris's brightness, 0 above three quarters, in between around
-    # halfway.
+    # Step 4: weight 1 near the pupil's darkness, 0 near the iris's brightness.
     weight = np.clip(2 * (iris - smooth) / (iris - pupil) - 0.5, 0, 1)
     weight[distance_sq > (PUPIL_MAX_SIZE * radius) ** 2] = 0
     total = weight.sum()
     if total < 5:
-        return None  # only a few dark pixels: not a pupil
-    # Step 5.
+        return None  # too few dark pixels
+    # Step 5: weighted centre.
     return (x0 + (weight * cols).sum() / total, y0 + (weight * rows).sum() / total)
 
 
 def _eye_openness(landmarks, w, h):
-    """How open the eyes are: the gap between the upper and lower eyelid
-    divided by the eye's width, averaged over both eyes."""
+    """Gap between the eyelids divided by the eye's width, averaged over both eyes."""
     total = 0.0
     for (upper, lower), (c1, c2) in ((RIGHT_EYE_LIDS, RIGHT_EYE_CORNERS),
                                      (LEFT_EYE_LIDS, LEFT_EYE_CORNERS)):
@@ -767,22 +462,9 @@ def _eye_openness(landmarks, w, h):
 
 
 class _Smoother:
-    """Cleans up one measurement, frame by frame.
-
-    1. Spike filter: the middle value (median) of the last 3 readings,
-       so a single bad reading, such as a wrong glint, is ignored.
-    2. Exponential moving average over about `smoothing_time` seconds
-       (normally SMOOTHING_TIME) to calm the jitter.
-    3. When a reading is missing (None: no glint, or a blink), the last
-       value is kept for up to `hold_time` seconds, then forgotten
-       (see IRIS_HOLD_TIME and GLINT_HOLD_TIME).
-
-    `value` is the cleaned-up measurement, or None if there is none.
-    `latest` is this picture's reading after step 1 only (None if this
-    picture had none). The calibration averages these at each dot: the
-    average over the dot already calms the jitter, and unlike `value`
-    they don't trail behind the eyes (see SMOOTHING_TIME).
-    """
+    """Cleans one measurement: median of the last 3 readings (spike filter), then a moving average
+    over smoothing_time; a missing reading keeps the last value for hold_time. latest is the
+    spike-filtered reading only."""
 
     def __init__(self, hold_time, smoothing_time=SMOOTHING_TIME):
         self.hold_time = hold_time
@@ -792,7 +474,7 @@ class _Smoother:
     def reset(self):
         self.value = None
         self.latest = None
-        self._recent = []              # the last 3 readings
+        self._recent = []  # last 3 readings
         self._last_reading_time = None
 
     def update(self, reading):
@@ -800,7 +482,7 @@ class _Smoother:
         self.latest = None
         if reading is None:
             if self._last_reading_time is not None and now - self._last_reading_time > self.hold_time:
-                self.reset()  # gone for too long: forget the old value
+                self.reset()  # gone too long: forget
             return
         since_last = None if self._last_reading_time is None else now - self._last_reading_time
         self._last_reading_time = now
@@ -808,28 +490,16 @@ class _Smoother:
         spike_free = float(np.median(self._recent))
         self.latest = spike_free
         if self.value is None:
-            self.value = spike_free  # first reading: nothing to blend with yet
+            self.value = spike_free  # first reading
         else:
-            # The new reading's share grows with the time since the last
-            # one, so the smoothing takes the same time at any frame rate.
+            # The new reading's share grows with the time since the last one.
             alpha = 1.0 - np.exp(-since_last / self.smoothing_time)
             self.value = alpha * spike_free + (1 - alpha) * self.value
 
 
 class _Eye:
-    """PCCR for one eye: finds its pupil and glints in each picture and
-    keeps its own smoothed measurements:
-
-        vy = (pupil y - glint y) / eye width     (up/down)
-        hx = (pupil x - glint x) / eye width     (left/right)
-
-    Dividing by the eye's width means they don't change when the user
-    sits nearer or further away. "glint" is the point halfway between
-    the two glints (see _glint_middle).
-
-    It also gives the eye's centre for the iris measurements fx and iy
-    (see centre() and USE_PUPIL).
-    """
+    """PCCR for one eye: vy and hx = (pupil - glint middle) / eye width, smoothed. Also gives the
+    eye's centre for fx and iy (see USE_PUPIL)."""
 
     def __init__(self, iris_center, iris_edge, corners):
         self.iris_center = iris_center
@@ -837,24 +507,20 @@ class _Eye:
         self.corners = corners
         self.vy = _Smoother(GLINT_HOLD_TIME)
         self.hx = _Smoother(GLINT_HOLD_TIME)
-        # Remembered about the glints (see _glint_middle):
-        self.half_gap = None          # from the middle of the pair to the right-hand glint
-        self.middle = None            # where the middle of the pair was last time
-        self.frames_without_pair = 0  # pictures in a row in which the pair wasn't found
-        self.frames_rejected = 0      # pictures in a row in which the glints were thrown away
-        # From the latest picture (full-picture pixels, None if not found):
+        # Glint memory (see _glint_middle):
+        self.half_gap = None  # from the pair's middle to the right glint
+        self.middle = None  # the pair's middle last time
+        self.frames_without_pair = 0  # pictures without the pair
+        self.frames_rejected = 0  # pictures with rejected glints
+        # Latest picture (full-picture pixels, None if not found):
         self.iris_point = None   # MediaPipe's iris centre
-        self.pupil_point = None  # the pupil centre found by find_pupil
+        self.pupil_point = None  # found by find_pupil
         self.eye_width = None
-        # Usual position of the pupil centre relative to MediaPipe's iris
-        # centre (divided by the eye width), for pictures in which the
-        # pupil isn't found (see centre()).
+        # Usual pupil position relative to MediaPipe's iris centre, for when the pupil isn't found.
         self.pupil_offset = None
 
     def forget(self):
-        """Forgets everything remembered about the glints and the pupil.
-        Used when the face is lost: it may come back in another place or
-        distance."""
+        """Forgets the glints and pupil (face lost)."""
         self.half_gap = None
         self.middle = None
         self.frames_without_pair = 0
@@ -862,11 +528,8 @@ class _Eye:
         self.pupil_offset = None
 
     def centre(self):
-        """The eye's centre in the latest picture, for fx and iy (see
-        USE_PUPIL), in full-picture pixels: the pupil centre if it was
-        found, otherwise MediaPipe's iris centre moved by the usual
-        distance between the two (so the measurement doesn't jump), or
-        None if the eye couldn't be measured at all."""
+        """The eye's centre for fx and iy: the pupil, else MediaPipe's iris centre plus the usual
+        offset, or None."""
         if self.pupil_point is not None:
             return self.pupil_point
         if self.iris_point is None:
@@ -877,9 +540,8 @@ class _Eye:
         return (self.iris_point[0] + dx * self.eye_width, self.iris_point[1] + dy * self.eye_width)
 
     def measure(self, frame, landmarks):
-        """Measures this eye in the full-size picture and updates vy and
-        hx. Returns the glints and pupil found, as ("glint"/"pupil", x, y)
-        points (full-picture pixels) to draw on the preview."""
+        """Measures this eye and updates vy and hx; returns the glint and pupil points for the
+        preview."""
         h, w = frame.shape[:2]
         self.iris_point = None
         self.pupil_point = None
@@ -889,22 +551,17 @@ class _Eye:
             return landmarks[i].x * w, landmarks[i].y * h
 
         cx, cy = pixel(self.iris_center)
-        # Iris radius: average distance from the iris centre to its 4 edge points.
+        # Iris radius: average distance to its 4 edge points.
         iris_radius = np.mean([np.hypot(pixel(i)[0] - cx, pixel(i)[1] - cy) for i in self.iris_edge])
         (ax, ay), (bx, by) = pixel(self.corners[0]), pixel(self.corners[1])
         eye_width = np.hypot(ax - bx, ay - by)
         if iris_radius < 2 or eye_width < 10:
-            self.skip()  # eye too small in the picture to measure
+            self.skip()  # eye too small to measure
             return []
         self.iris_point = (cx, cy)
         self.eye_width = eye_width
 
-        # Grayscale (average of the colour channels) of only the small
-        # area around this eye -- much faster than converting the whole
-        # picture. It is big enough for the glint search around the
-        # pupil, which can be near the iris edge. Positions found in it
-        # are relative to its corner (x0, y0); adding x0, y0 gives
-        # positions in the full picture.
+        # Grayscale crop around this eye, big enough for the glint search.
         search_radius = iris_radius * (PUPIL_MAX_SIZE + GLINT_SEARCH_SCALE) + 3
         box, x0, y0 = _crop_square(frame, cx, cy, search_radius)
         gray = box.mean(axis=2) if box.ndim == 3 else box
@@ -919,7 +576,7 @@ class _Eye:
         offset = ((pupil[0] - cx) / eye_width, (pupil[1] - cy) / eye_width)
         if self.pupil_offset is None:
             self.pupil_offset = offset
-        else:   # averaged over recent pictures, so one noisy picture doesn't matter
+        else:  # averaged over recent pictures
             self.pupil_offset = tuple(SMOOTHING_ALPHA * new + (1 - SMOOTHING_ALPHA) * old
                                       for new, old in zip(offset, self.pupil_offset))
         glints = [(gx + x0, gy + y0) for gx, gy in glints]
@@ -934,19 +591,13 @@ class _Eye:
         return points
 
     def skip(self):
-        """No measurement this frame (blink, no glint): keep the last one."""
+        """No measurement this picture: keep the last one."""
         self.vy.update(None)
         self.hx.update(None)
 
     def _glint_middle(self, glints, pupil, iris_radius):
-        """The point halfway between the two LED glints, or None.
-
-        If one glint is missing (hidden by the eyelid, or it slipped off
-        the cornea), the middle is worked out from the other glint and
-        the remembered gap between the two. Simply using the glint that
-        is left would make the measurement jump by half that gap, which
-        is more than its whole top-to-bottom range.
-        """
+        """Middle of the two LED glints, or None. With one glint missing, it is worked out from the
+        other and the remembered gap."""
         if not glints:
             return None
         pair = self._find_pair(glints, pupil, iris_radius)
@@ -955,35 +606,30 @@ class _Eye:
             middle = ((left[0] + right[0]) / 2, (left[1] + right[1]) / 2)
             gap = ((right[0] - left[0]) / 2, (right[1] - left[1]) / 2)
             if self.half_gap is None or self.frames_without_pair > MAX_MISSED_FRAMES:
-                self.half_gap = gap  # first pair, or the old one is out of date
+                self.half_gap = gap  # first pair, or the old gap is out of date
             else:
-                # Averaged over recent pictures, so one noisy picture doesn't matter.
+                # Averaged over recent pictures.
                 self.half_gap = tuple(SMOOTHING_ALPHA * new + (1 - SMOOTHING_ALPHA) * old
                                       for new, old in zip(gap, self.half_gap))
             self.frames_without_pair = 0
         else:
             self.frames_without_pair += 1
             if self.half_gap is None or self.middle is None:
-                # Only one LED in use, or no pair seen yet: use the glint nearest the pupil.
+                # No pair known yet: use the glint nearest the pupil.
                 middle = min(glints, key=lambda g: np.hypot(g[0] - pupil[0], g[1] - pupil[1]))
             else:
-                # Each glint is either the left one of the pair (the middle
-                # is half a gap to its right), the right one (half a gap
-                # to its left), or both glints merged into one spot (the
-                # middle is the spot itself). Use the guess nearest to the
-                # last middle.
+                # The glint is the left one, the right one, or both merged: use the guess nearest
+                # the last middle.
                 dx, dy = self.half_gap
                 guesses = [(gx + dx, gy + dy) for gx, gy in glints] + \
                           [(gx - dx, gy - dy) for gx, gy in glints] + list(glints)
                 last_x, last_y = self.middle
                 middle = min(guesses, key=lambda m: np.hypot(m[0] - last_x, m[1] - last_y))
                 if np.hypot(middle[0] - last_x, middle[1] - last_y) > GLINT_JUMP_LIMIT * iris_radius:
-                    # No glint where one is expected: can't tell which it is.
+                    # Can't tell which glint it is.
                     self.frames_rejected += 1
                     if self.frames_rejected >= GLINT_RESTART_FRAMES:
-                        # Not a passing stray reflection: the glints have
-                        # moved (see GLINT_RESTART_FRAMES). Start again
-                        # from the glint nearest the pupil next time.
+                        # The glints have moved (GLINT_RESTART_FRAMES): start again next time.
                         self.middle = None
                         self.frames_rejected = 0
                     return None
@@ -992,19 +638,12 @@ class _Eye:
         return middle
 
     def _find_pair(self, glints, pupil, iris_radius):
-        """The two LED glints as (left, right), or None.
-
-        Until the gap between them is known (or if the pair hasn't been
-        found for MAX_MISSED_FRAMES pictures), it is learned from a
-        picture with exactly two glints, which are then almost certainly
-        the two LEDs. After that, a pair must be the same distance apart
-        as before (within GLINT_GAP_TOLERANCE), checking the glints
-        nearest the pupil first.
-        """
+        """The two LED glints as (left, right), or None; the gap is learned from a picture with
+        exactly two glints."""
         if self.half_gap is None or self.frames_without_pair > MAX_MISSED_FRAMES:
             if len(glints) != 2:
                 return None
-            return tuple(sorted(glints))  # sorted left to right (by x)
+            return tuple(sorted(glints))  # left to right
         nearest = sorted(glints, key=lambda g: np.hypot(g[0] - pupil[0], g[1] - pupil[1]))
         for i, first in enumerate(nearest):
             for second in nearest[i + 1:]:
@@ -1023,12 +662,7 @@ def _average_known(values):
 
 
 def _draw_dot(frame, cx, cy, radius=4, color=(0, 255, 0)):
-    """Draws a small filled square marker on an RGB numpy frame.
-
-    Uses plain numpy rather than cv2.circle so the live preview works
-    on the Pi, where OpenCV isn't necessarily installed (picamera2
-    handles capture there, so OpenCV would be dead weight).
-    """
+    """Draws a small square marker on an RGB frame (numpy, no OpenCV needed)."""
     h, w = frame.shape[:2]
     y0, y1 = max(0, cy - radius), min(h, cy + radius + 1)
     x0, x1 = max(0, cx - radius), min(w, cx + radius + 1)
@@ -1037,9 +671,7 @@ def _draw_dot(frame, cx, cy, radius=4, color=(0, 255, 0)):
 
 
 def _least_squares(columns, outputs):
-    """Least-squares fit: output = c1 * column1 + c2 * column2 + ... + b.
-    Returns ([c1, c2, ...], b, r2), where r2 (R squared) says how well it
-    fits: 1.0 = perfectly, 0 = not at all."""
+    """Least squares: output = c1 * column1 + ... + b. Returns ([c1, ...], b, r2)."""
     y = np.array(outputs, dtype=float)
     a_matrix = np.column_stack([np.array(column, dtype=float) for column in columns] + [np.ones_like(y)])
     solution = np.linalg.lstsq(a_matrix, y, rcond=None)[0]
@@ -1050,11 +682,7 @@ def _least_squares(columns, outputs):
 
 
 def _left_out_error(columns, outputs):
-    """The typical error (root mean square, in screen pixels) at each
-    calibration dot when the fit is made WITHOUT that dot: how well the
-    fit predicts places it hasn't seen, as in real use. A fit with more
-    inputs always matches the dots it was made from a bit better, but
-    may predict new places worse. (The standard "leave-one-out" check.)"""
+    """Leave-one-out error (RMS, screen pixels): how well the fit predicts dots it hasn't seen."""
     errors = []
     for left_out in range(len(outputs)):
         keep = [k for k in range(len(outputs)) if k != left_out]
@@ -1066,47 +694,22 @@ def _left_out_error(columns, outputs):
 
 
 def _adjusted_r2(r2, points, inputs):
-    """R squared lowered a little for every input a fit uses. A fit with
-    more inputs always matches the calibration dots a bit better, even
-    when the extra input is just noise; this makes the comparison fair.
-    (The standard "adjusted R squared".)"""
+    """Adjusted R squared: lowered a little for every input used."""
     if points - inputs - 1 <= 0:
         return 0.0
     return 1.0 - (1.0 - r2) * (points - 1) / (points - inputs - 1)
 
 
 def _fit_axis(points, shakes):
-    """Fits one direction (left/right or up/down) from the calibration
-    points, each (glint value or None, iris value, screen position).
-    `shakes` is (glint shake, iris shake): how much each measurement
-    typically wobbles while the eyes rest on a dot (standard deviation).
-
-    Tries three straight-line fits -- glints only, iris only, and both
-    together -- and returns (best fit, iris-only fit). The best fit is
-    the one expected to put the pointer closest to where the user looks.
-    That expected error combines
-      - the fit's error at dots left out of it (see _left_out_error), and
-      - how much the pointer shakes with this fit: each measurement's
-        shake times the number the fit multiplies it by. A fit that
-        multiplies a shaky measurement by a big number makes a shaky
-        pointer, however well it matches the calibration dots.
-    Each fit is a dict with "name", the slope for each input it uses
-    ("glint" and/or "iris"), "b", "r2" (adjusted, see _adjusted_r2) and
-    "error" (expected error, screen pixels). A fit is None if it wasn't
-    possible (dots at fewer than 2 different positions). The iris-only
-    fit is the backup for moments when no glint is seen.
-    """
+    """Fits one direction from points (glint value or None, iris value, screen position): glints
+    only, iris only and both, and returns (best fit, iris-only fit). The best fit has the lowest
+    expected error: leave-one-out error plus the shaking it would cause (shakes = glint and iris
+    shake)."""
     shake_of = {"glint": shakes[0], "iris": shakes[1]}
-    candidates = []  # (name, points used, inputs used)
+    candidates = []  # (name, points, inputs)
     glint_points = [p for p in points if p[0] is not None]
-    # The glint fits are only tried if glints were seen at EVERY dot. If
-    # they were missing at some dots, they will also be missing in that
-    # part of the screen in use, and the pointer then keeps switching
-    # between the glint fit and the iris backup, which don't agree
-    # exactly, so it jumps. (On 3 November, with the camera above the
-    # screen, the glints were lost at the bottom dots; recomputed from
-    # the readings, using the iris for both directions gave 1.6 cm and
-    # 1.5 cm of shaking, against 2.0 cm and 2.9 cm with the glints.)
+    # Glint fits only if glints were seen at every dot; otherwise the pointer would
+    # switch between the glint and iris fits and jump.
     if (len(glint_points) == len(points)
             and len({round(screen) for g, i, screen in glint_points}) >= 2):
         candidates.append(("glints", glint_points, ["glint"]))
@@ -1134,9 +737,8 @@ def _fit_axis(points, shakes):
 
 
 def _predict(fit, backup, glint_value, iris_value):
-    """Screen position from a fit made by _fit_axis. If the fit needs the
-    glints and none is seen right now, the backup (iris-only) fit is
-    used instead. None if neither can be used."""
+    """Screen position from a fit; uses the iris-only backup when no glint is seen. None if neither
+    works."""
     if "glint" in fit and glint_value is None:
         fit = backup
         if fit is None:
@@ -1150,24 +752,16 @@ def _predict(fit, backup, glint_value, iris_value):
 
 
 # ---------------------------------------------------------------------
-# Camera backends
+# Camera backends: read() returns a mirrored RGB picture, the same on both.
 # ---------------------------------------------------------------------
-# Two interchangeable classes with the same three methods (read, close,
-# and a constructor that raises if unavailable). The capture loop below
-# doesn't know or care which one it got -- that's what lets the same
-# code run on the laptop and the Pi.
-#
-# Both return frames as RGB numpy arrays, already mirrored, so anything
-# downstream (MediaPipe, the preview) sees an identical format.
-# `mediapipe_step` says how much to shrink the frame before MediaPipe.
 
 class _OpenCVCamera:
-    """Laptop/USB webcam via OpenCV. Used when picamera2 isn't present."""
+    """Laptop/USB webcam via OpenCV."""
 
     name = "OpenCV webcam"
     mediapipe_step = 1  # webcam pictures are already small
-    infrared = False    # a normal webcam: the pupil isn't clear (see USE_PUPIL)
-    focal_length_px = None  # unknown, so no distance estimate
+    infrared = False  # normal webcam: no clear pupil
+    focal_length_px = None  # unknown: no distance estimate
 
     def __init__(self):
         if cv2 is None:
@@ -1180,7 +774,7 @@ class _OpenCVCamera:
         ok, frame = self._cap.read()
         if not ok:
             return None
-        frame = cv2.flip(frame, 1)  # mirror, so it feels like a mirror
+        frame = cv2.flip(frame, 1)  # mirror
         return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
     def close(self):
@@ -1188,45 +782,32 @@ class _OpenCVCamera:
 
 
 class _PiCamera:
-    """Raspberry Pi CSI camera (Camera Module 3 NoIR) via picamera2.
-
-    OpenCV's VideoCapture cannot read libcamera-based CSI cameras at
-    all, which is why this separate backend exists rather than just
-    passing a different device index.
-    """
+    """Raspberry Pi camera (Camera Module 3 NoIR) via picamera2."""
 
     name = "Raspberry Pi camera (picamera2)"
     mediapipe_step = PI_MEDIAPIPE_STEP
-    infrared = True   # NoIR camera with IR LEDs: the pupil shows clearly dark
+    infrared = True  # NoIR + IR LEDs: dark pupil
 
     def __init__(self):
         if Picamera2 is None:
             raise RuntimeError("picamera2 is not installed")
         self._picam = Picamera2()
-        # picamera2's format names are the reverse of the pixel order in
-        # memory: "BGR888" gives pixels as [R, G, B], which is the RGB
-        # order MediaPipe expects. (The old mono camera made every
-        # channel the same, so the order didn't matter; with a colour
-        # camera it does.)
+        # "BGR888" in picamera2 gives pixels in RGB order, as MediaPipe expects.
         config = self._picam.create_preview_configuration(
             main={"size": (CAPTURE_WIDTH, CAPTURE_HEIGHT), "format": "BGR888"}
         )
         self._picam.configure(config)
         self._picam.start()
-        # Fixed focus (see PI_LENS_POSITION and FOCUS_ON_EYES). Exposure
-        # is left on automatic, its default.
+        # Fixed focus (see FOCUS_ON_EYES); automatic exposure.
         self._picam.set_controls({
             "AfMode": libcamera_controls.AfModeEnum.Manual,
             "LensPosition": PI_LENS_POSITION,
         })
-        time.sleep(2)  # let exposure and focus settle before the first frames
+        time.sleep(2)  # let exposure and focus settle
         self.focal_length_px = self._focal_length_px()
 
     def _focal_length_px(self):
-        """The lens's focal length in pixels of our pictures, for the
-        distance estimate (see get_face_distance_cm), or None. Each
-        picture pixel covers (sensor area used / picture width) sensor
-        pixels."""
+        """Lens focal length in picture pixels, for the face distance, or None."""
         try:
             focal_mm = PI_LENS_FOCAL_MM
             if "wide" in str(self._picam.camera_properties.get("Model", "")).lower():
@@ -1238,23 +819,21 @@ class _PiCamera:
             return None
 
     def set_lens(self, dioptres):
-        """Moves the lens to `dioptres` (see FOCUS_ON_EYES) and returns a
-        picture taken after it got there (see FOCUS_MAX_WAIT_PICTURES)."""
+        """Moves the lens to dioptres and returns a picture taken once it got there."""
         self._picam.set_controls({"AfMode": libcamera_controls.AfModeEnum.Manual,
                                   "LensPosition": float(dioptres)})
         for waited in range(1, FOCUS_MAX_WAIT_PICTURES + 1):
-            # Each picture comes with the lens position it was taken at.
+            # Each picture reports its lens position.
             lens = self._picam.capture_metadata().get("LensPosition")
             if lens is None and waited >= FOCUS_SETTLE_PICTURES:
-                break   # the camera doesn't report it: a fixed number of pictures
+                break  # not reported: fixed number of pictures
             if lens is not None and abs(lens - dioptres) < 0.05:
-                break   # the lens has been told to go there
-        self._picam.capture_array()   # one more picture while the lens settles
+                break  # the lens is there
+        self._picam.capture_array()  # one more while the lens settles
         return self.read()
 
     def describe(self):
-        """The camera's mode and the part of the sensor in use, as text,
-        for working out how many pixels the eyes get."""
+        """The camera's mode and sensor area, as text."""
         try:
             sensor = self._picam.camera_configuration().get("sensor", {})
             crop = self._picam.capture_metadata().get("ScalerCrop")
@@ -1265,19 +844,15 @@ class _PiCamera:
     def read(self):
         frame = self._picam.capture_array()
         if PI_CAMERA_UPSIDE_DOWN:
-            frame = frame[::-1, ::-1]  # rotate 180 degrees: flip top-bottom and left-right
-        return frame[:, ::-1]  # mirror horizontally (numpy, no OpenCV needed)
+            frame = frame[::-1, ::-1]  # rotate 180 degrees
+        return frame[:, ::-1]  # mirror
 
     def close(self):
         self._picam.stop()
 
 
 def _open_camera():
-    """Returns a working camera backend, or None if neither is usable.
-
-    Tries the Pi camera first: if picamera2 imported successfully we're
-    almost certainly on a Pi, where it's the only option that works.
-    """
+    """Returns a working camera (the Pi camera first), or None."""
     for backend in (_PiCamera, _OpenCVCamera):
         try:
             camera = backend()
@@ -1289,81 +864,67 @@ def _open_camera():
 
 
 class GazeEngine:
-    """
-    Owns the camera + MediaPipe pipeline in a background thread.
-
-    Thread safety: all state shared with the main (Kivy) thread is
-    guarded by self._lock. Kivy code should only ever call the public
-    methods below -- never touch the camera/MediaPipe objects directly,
-    since those only exist inside the background thread.
-    """
+    """Camera + MediaPipe in a background thread. Shared state is guarded by self._lock; the app
+    only calls the public methods."""
 
     def __init__(self):
         self._lock = threading.Lock()
-        self._latest_feature = None  # (fx, vy, iy, hx), or None if no face seen
-        self._latest_raw_feature = None  # the same, not averaged over time (see get_latest_raw_feature)
-        # Cleaned-up measurements (see _Smoother), background-thread only.
+        self._latest_feature = None  # (fx, vy, iy, hx), None if no face
+        self._latest_raw_feature = None  # the same, not averaged over time
+        # Smoothed measurements (background thread only).
         self._fx = _Smoother(IRIS_HOLD_TIME)
         self._iy = _Smoother(IRIS_HOLD_TIME)
         self._face_size = _Smoother(IRIS_HOLD_TIME)
         self._head = [_Smoother(IRIS_HOLD_TIME, HEAD_SMOOTHING_TIME) for _ in range(4)]  # see _head_pose
         self._eyes = [_Eye(RIGHT_IRIS_CENTER, RIGHT_IRIS_EDGE, RIGHT_EYE_CORNERS),
                       _Eye(LEFT_IRIS_CENTER, LEFT_IRIS_EDGE, LEFT_EYE_CORNERS)]
-        self._openness_history = []  # eye openness in recent frames, for the blink check
-        self._closed_frames = 0      # frames in a row with the eyes nearly closed
-        self._eyes_closed = False    # nearly closed in the latest picture (see eyes_closed)
-        self._latest_face_size = None  # smoothed face size, shared with the Kivy thread
-        self._latest_head = None       # smoothed _head_pose, None if no face seen
-        self._latest_debug_frame = None  # RGB numpy frame with dots drawn, for a live preview
-        self._latest_eyes = None  # (full frame, glint/pupil points, iris centres, landmarks,
-                                  #  picture number) for close-ups and eye pictures
-        self._fps = None          # pictures processed per second, measured
-        self._slowdown = None     # why the Pi is slowing itself down, if it is (see _pi_health)
-        self._focus_requested = FOCUS_ON_EYES  # True: focus the lens on the eyes (see FOCUS_ON_EYES)
-        self._focusing = False    # True while that is being done
-        self._low_power = False   # True: process only LOW_POWER_FPS pictures a second
-        self._lens = None         # the lens position it chose (dioptres), None until then
-        self._eye_boxes = None    # boxes around the eyes in the latest picture with a face
-        self._use_pupil = False   # see USE_PUPIL; set once the camera is known
-        self._focal_px = None     # the camera's focal length in pixels, for the distance
-        self._iris_size = _Smoother(IRIS_HOLD_TIME)  # iris diameter in pixels, smoothed
-        self._latest_distance = None  # face distance in cm (see get_face_distance_cm)
-        self.camera_mode = ""     # the camera's mode (see _PiCamera.describe)
+        self._openness_history = []  # for the blink check
+        self._closed_frames = 0  # frames in a row with the eyes nearly closed
+        self._eyes_closed = False  # see eyes_closed
+        self._latest_face_size = None  # smoothed face size
+        self._latest_head = None  # smoothed head pose
+        self._latest_debug_frame = None  # preview frame with dots drawn
+        self._latest_eyes = None  # for eye close-ups and eye pictures
+        self._fps = None  # pictures processed per second
+        self._slowdown = None  # see _pi_health
+        self._focus_requested = FOCUS_ON_EYES  # focus the lens on the eyes
+        self._focusing = False  # True while focusing
+        self._low_power = False  # see LOW_POWER_FPS
+        self._lens = None  # chosen lens position (dioptres)
+        self._eye_boxes = None  # boxes around the eyes
+        self._use_pupil = False  # see USE_PUPIL
+        self._focal_px = None  # focal length in pixels
+        self._iris_size = _Smoother(IRIS_HOLD_TIME)  # iris diameter, smoothed
+        self._latest_distance = None  # cm, see get_face_distance_cm
+        self.camera_mode = ""  # see _PiCamera.describe
         self._running = False
         self._thread = None
-        self._camera_ok = True  # flips False if the camera can't be opened
+        self._camera_ok = True  # False if the camera can't be opened
 
-        # Calibration points, and the fitted straight lines once
-        # fit_calibration() runs (see _fit_axis). A fit is None if that
-        # direction isn't usable; the backups are the iris-only fits.
-        self._x_points = []  # (hx, fx, screen_x); hx is None if no glint was seen
-        self._y_points = []  # (vy, iy, screen_y); vy is None if no glint was seen
-        self._shakes = []    # (fx, vy, iy, hx) shake at each dot (see add_calibration_point)
-        self._x_heads = []   # the head's pose at each of _x_points (None if unknown)
-        self._y_heads = []   # the same for _y_points
-        self._calib_head = None  # the head's average pose during calibration
+        # Calibration points, and the fits from fit_calibration() (None = unusable).
+        self._x_points = []  # (hx, fx, screen_x); hx None without a glint
+        self._y_points = []  # (vy, iy, screen_y); vy None without a glint
+        self._shakes = []  # shake of (fx, vy, iy, hx) at each dot
+        self._x_heads = []  # head pose at each dot
+        self._y_heads = []  # the same for _y_points
+        self._calib_head = None  # average head pose during calibration
         self._x_fit = None
         self._y_fit = None
         self._x_backup = None
         self._y_backup = None
 
-        # Distance correction (see the settings at the top): the face size
-        # at each calibration dot, their average once fitted, and the
-        # middle of the calibration dots on screen.
+        # Distance correction: face sizes at the dots, their average, the dots' middle.
         self._calib_face_sizes = []
         self._calib_face_size = None
         self._centre_x = None
         self._centre_y = None
 
-        # Re-centring (see set_pointer_shift): how far the pointer is moved
-        # after the fits, (x, y) in screen pixels. Back to (0, 0) at every
-        # new calibration.
+        # Re-centring shift (x, y) in screen pixels (see set_pointer_shift).
         self._pointer_shift = (0.0, 0.0)
-        # How far off up/down was in main.py's accuracy test (cm), or None
-        # if there was no test. main.py uses it to choose Row mode.
+        # Up/down error of the accuracy test (cm), for Row mode in main.py.
         self.updown_error_cm = None
 
-    # ---- lifecycle ---------------------------------------------------
+    # ---- lifecycle ----
     def start(self):
         if self._running:
             return
@@ -1375,8 +936,7 @@ class GazeEngine:
         self._running = False
 
     def _is_blink(self, landmarks, w, h):
-        """True if the eyes are much less open than usual, for no longer
-        than a blink lasts (see the blink settings at the top)."""
+        """True if the eyes are much less open than usual, for no longer than a blink."""
         openness = _eye_openness(landmarks, w, h)
         self._openness_history = (self._openness_history + [openness])[-OPENNESS_HISTORY:]
         nearly_closed = openness < BLINK_OPENNESS * float(np.median(self._openness_history))
@@ -1385,11 +945,8 @@ class GazeEngine:
         return 0 < self._closed_frames <= BLINK_MAX_FRAMES
 
     def eyes_closed(self):
-        """True if the eyes were nearly closed in the latest picture (much
-        less open than usual, see BLINK_OPENNESS), however long they have
-        been closed. The gaze readings skip short blinks only (see
-        BLINK_MAX_FRAMES); the calibration uses this to also skip longer
-        closures, which some patients have (see REDO_MAX_DOTS in main.py)."""
+        """True if the eyes were nearly closed in the latest picture, however long (used by
+        calibration)."""
         return self._eyes_closed
 
     def _run_loop(self):
@@ -1427,35 +984,31 @@ class GazeEngine:
         print("[GazeEngine] Eye position from " + ("the pupil found in the picture (USE_PUPIL)"
                                                    if self._use_pupil else "MediaPipe's iris centre"))
         start_time = time.time()
-        # Frame rate, and where the time goes, measured over 5 seconds at
-        # a time and printed (seconds spent on each step, all pictures).
+        # fps and time per step, printed every 5 seconds.
         fps_count, fps_start = 0, time.time()
         spent = {"camera": 0.0, "MediaPipe": 0.0, "eyes": 0.0}
         picture_number = 0
         last_picture_at = 0.0
         while self._running:
             if self._low_power:
-                # Resting (see LOW_POWER_FPS): wait until the next picture is
-                # due, a little at a time, so waking up is not delayed.
+                # Resting: wait for the next picture, a little at a time.
                 wait = last_picture_at + 1 / LOW_POWER_FPS - time.time()
                 if wait > 0:
                     time.sleep(min(wait, 0.1))
                     continue
             last_picture_at = time.time()
             if self._focus_requested:
-                # Focusing on the eyes was asked for (see request_focus). It
-                # is done here, between two pictures, because the camera may
-                # only be used from this thread, and only once the eyes have
-                # been seen, because it measures how sharp they are.
+                # Focus requested: done here (the camera belongs to this thread) once the eyes are
+                # seen.
                 if getattr(camera, "set_lens", None) is None:
-                    self._focus_requested = False   # the laptop webcam can't focus
+                    self._focus_requested = False  # laptop webcam can't focus
                 elif self._eye_boxes is not None:
                     self._focus_requested = False
                     self._focus_on_eyes(camera)
-                    self._reset_measurements()   # start afresh with the sharp pictures
-                    fps_count, fps_start = 0, time.time()   # don't count the pause in the fps
+                    self._reset_measurements()  # start afresh with sharp pictures
+                    fps_count, fps_start = 0, time.time()  # don't count the pause
             step_start = time.time()
-            frame = camera.read()  # full-size RGB picture
+            frame = camera.read()  # full-size RGB
             if frame is None:
                 continue
             spent["camera"] += time.time() - step_start
@@ -1472,8 +1025,7 @@ class GazeEngine:
                 print(f"[GazeEngine] {self._fps:.1f} pictures a second{resting}; per picture: {times}{health}")
                 fps_count, fps_start = 0, time.time()
                 spent = dict.fromkeys(spent, 0.0)
-            # MediaPipe gets a smaller copy (every Nth pixel). It needs a
-            # contiguous array; slicing produces a view, so copy it.
+            # Smaller contiguous copy for MediaPipe.
             step = camera.mediapipe_step
             small = np.ascontiguousarray(frame[::step, ::step])
             sh, sw = small.shape[:2]
@@ -1488,7 +1040,7 @@ class GazeEngine:
             fh, fw = frame.shape[:2]
             if not result.face_landmarks:
                 feature = raw_feature = None
-                # Reset so re-acquiring doesn't drag from a stale position.
+                # Start afresh when the face comes back.
                 self._reset_measurements()
             else:
                 landmarks = result.face_landmarks[0]
@@ -1499,7 +1051,7 @@ class GazeEngine:
                     smoother.update(value)
                 points = []
                 if self._is_blink(landmarks, sw, sh):
-                    # Keep the last measurements until the eyes open again.
+                    # Blink: keep the last measurements.
                     self._fx.update(None)
                     self._iy.update(None)
                     for eye in self._eyes:
@@ -1509,36 +1061,32 @@ class GazeEngine:
                     for eye in self._eyes:
                         points += eye.measure(frame, landmarks)
                     spent["eyes"] += time.time() - step_start
-                    # The eyes' centres: the pupils found in the picture (see
-                    # USE_PUPIL), or MediaPipe's iris centres (centres = None).
+                    # Eye centres: the pupils (USE_PUPIL), or MediaPipe's iris centres (None).
                     centres = None
                     if self._use_pupil:
                         centres = [eye.centre() for eye in self._eyes]
                         if any(centre is None for centre in centres):
-                            centres = None   # an eye couldn't be measured at all
+                            centres = None  # an eye couldn't be measured
                     self._fx.update(_compute_horizontal_feature(landmarks, fw, fh, centres))
                     self._iy.update(_compute_iris_height(landmarks, fw, fh, centres))
                 iris_centres = [(landmarks[i].x * fw, landmarks[i].y * fh)
                                 for i in (RIGHT_IRIS_CENTER, LEFT_IRIS_CENTER)]
                 eyes = (frame, points, iris_centres, landmarks, picture_number)
 
-                # Each eye's glint measurements are smoothed separately and
-                # then averaged, so the result doesn't jump when one eye's
-                # glints are lost for a moment.
+                # Each eye's glint measurements are smoothed, then averaged.
                 vy = _average_known([eye.vy.value for eye in self._eyes])
                 hx = _average_known([eye.hx.value for eye in self._eyes])
                 if self._fx.value is None:
-                    feature = None  # eyes closed for over a second
+                    feature = None  # eyes closed over a second
                 else:
                     feature = (self._fx.value, vy, self._iy.value, hx)
-                # This picture's own readings (see get_latest_raw_feature).
+                # This picture's own readings.
                 raw_feature = None
                 if self._fx.latest is not None and self._iy.latest is not None:
                     raw_feature = (self._fx.latest, _average_known([eye.vy.latest for eye in self._eyes]),
                                    self._iy.latest, _average_known([eye.hx.latest for eye in self._eyes]))
 
-                # Preview dots: green = iris (MediaPipe), white = glint,
-                # yellow = pupil found in the picture.
+                # Preview dots: green = iris, white = glint, yellow = pupil.
                 for idx in (RIGHT_IRIS_CENTER, LEFT_IRIS_CENTER):
                     lm = landmarks[idx]
                     _draw_dot(debug_frame, int(lm.x * sw), int(lm.y * sh))
@@ -1557,13 +1105,12 @@ class GazeEngine:
                                          if self._focal_px and iris else None)
                 self._latest_debug_frame = debug_frame
                 self._latest_eyes = eyes
-            self._focusing = False   # (see _focus_on_eyes)
+            self._focusing = False  # see _focus_on_eyes
 
         camera.close()
 
     def _reset_measurements(self):
-        """Forgets the smoothed measurements and what the eyes remember,
-        so that the next pictures start afresh."""
+        """Forgets the smoothed measurements and what the eyes remember."""
         for smoother in [self._fx, self._iy, self._face_size, self._iris_size] + self._head + \
                 [eye.vy for eye in self._eyes] + [eye.hx for eye in self._eyes]:
             smoother.reset()
@@ -1571,17 +1118,14 @@ class GazeEngine:
             eye.forget()
 
     def _focus_on_eyes(self, camera):
-        """Moves the lens to where the eyes are sharpest (see FOCUS_ON_EYES)
-        and leaves it there. The eyes are assumed to stay where they were
-        in the latest picture (the head rests on a support), so no
-        MediaPipe is needed while the lens moves. Takes a few seconds,
-        during which there are no gaze readings."""
+        """Moves the lens to where the eyes are sharpest (coarse steps, then fine). Takes a few
+        seconds without gaze readings."""
         self._focusing = True
         with self._lock:
-            self._latest_feature = None   # the pictures aren't measured meanwhile
+            self._latest_feature = None  # no readings meanwhile
             self._latest_raw_feature = None
         started = time.time()
-        sharpness = {}   # lens position -> how sharp the eyes were there
+        sharpness = {}  # lens position -> sharpness
 
         def try_lens(lens):
             lens = round(float(lens), 3)
@@ -1592,7 +1136,7 @@ class GazeEngine:
             for lens in FOCUS_LENS_POSITIONS:
                 try_lens(lens)
             best = max(sharpness, key=sharpness.get)
-            for steps in (-2, -1, 1, 2):   # finer steps either side of the sharpest
+            for steps in (-2, -1, 1, 2):  # finer steps either side
                 try_lens(best + steps * FOCUS_FINE_STEP)
             best = max(sharpness, key=sharpness.get)
             camera.set_lens(best)
@@ -1602,39 +1146,29 @@ class GazeEngine:
                   f"(sharpness at each lens position: {tried})")
         except Exception as e:
             print(f"[GazeEngine] Focusing on the eyes failed: {e}")
-        # _focusing goes back to False once the next picture has been
-        # measured (end of the _run_loop round), so the app never sees a
-        # moment with neither focusing nor a gaze reading.
+        # _focusing turns False only after the next picture is measured.
 
-    # ---- public API used by the Kivy app ------------------------------
+    # ---- public API used by the app ----
     def is_camera_ok(self):
         return self._camera_ok
 
     def get_latest_feature(self):
-        """Returns (fx, vy, iy, hx) or None if no face is currently
-        detected. vy and hx are None when no glint is visible (no IR, or
-        a laptop webcam)."""
+        """(fx, vy, iy, hx), or None if no face; vy and hx are None without a glint."""
         with self._lock:
             return self._latest_feature
 
     def get_latest_raw_feature(self):
-        """Like get_latest_feature, but this picture's own readings, only
-        cleared of single bad readings, not averaged over time (see
-        _Smoother); None if this picture had no reading (no face, a
-        blink). The calibration averages these at each dot."""
+        """Like get_latest_feature, but this picture's readings, not averaged over time."""
         with self._lock:
             return self._latest_raw_feature
 
     def get_debug_frame(self):
-        """Returns the latest camera frame (RGB numpy array, with iris,
-        glint and pupil dots drawn on it) for showing a live preview, or
-        None if unavailable."""
+        """Latest camera frame with the iris, glint and pupil dots drawn, or None."""
         with self._lock:
             return self._latest_debug_frame
 
     def get_head(self):
-        """The head's pose (turn, tilt, x, y), see _head_pose, smoothed,
-        or None if no face is currently detected."""
+        """Smoothed head pose (turn, tilt, x, y), or None."""
         with self._lock:
             return self._latest_head
 
@@ -1647,14 +1181,11 @@ class GazeEngine:
         return self._fps
 
     def set_low_power(self, on):
-        """True: process only LOW_POWER_FPS pictures a second (the app's
-        resting screen); False: as many as possible again."""
+        """True: process only LOW_POWER_FPS pictures a second; False: as many as possible."""
         self._low_power = bool(on)
 
     def request_focus(self):
-        """Asks for the lens to be focused on the eyes (see FOCUS_ON_EYES).
-        It happens in the background as soon as the eyes are seen, and
-        takes a few seconds without gaze readings (see is_focusing)."""
+        """Asks for the lens to be focused on the eyes (in the background)."""
         if FOCUS_ON_EYES:
             self._focus_requested = True
 
@@ -1663,26 +1194,17 @@ class GazeEngine:
         return self._focus_requested or self._focusing
 
     def get_lens_position(self):
-        """The lens position chosen by the last focusing (dioptres), or
-        None if it hasn't focused yet (see FOCUS_ON_EYES)."""
+        """Lens position from the last focusing (dioptres), or None."""
         return self._lens
 
     def get_face_distance_cm(self):
-        """How far the eyes are from the camera, in centimetres, worked out
-        from the size of the irises in the picture (see IRIS_DIAMETER_MM),
-        or None if unknown (no face, or the laptop webcam)."""
+        """Eyes-to-camera distance in cm from the iris size, or None."""
         with self._lock:
             return self._latest_distance
 
     def get_eye_picture(self):
-        """A picture of both eyes at the camera's full detail, for the
-        calibration's eye pictures (SAVE_EYE_PICTURES in main.py): they
-        let the eye measurements be checked and improved on real eyes.
-        Returns (picture number, grayscale picture as a numpy array, the
-        position of its top-left corner (x, y) in the camera picture, all
-        478 face landmarks as (x, y) in camera-picture pixels), or None
-        if no face is seen. The picture number tells pictures apart: the
-        same number means the same camera picture."""
+        """Both eyes at full detail for the calibration's eye pictures: (picture number, grayscale
+        picture, its corner (x, y), 478 landmarks), or None."""
         with self._lock:
             eyes = self._latest_eyes
         if eyes is None:
@@ -1691,8 +1213,7 @@ class GazeEngine:
         h, w = frame.shape[:2]
         pixels = np.array([(lm.x * w, lm.y * h) for lm in landmarks])
         around_eyes = pixels[RIGHT_EYE_CONTOUR + LEFT_EYE_CONTOUR]
-        # Both eyes, with a margin of a quarter of the distance between the
-        # outer eye corners on every side (eyebrows and cheeks are not needed).
+        # Both eyes plus a margin.
         margin = 0.25 * np.hypot(*(pixels[FACE_SIZE_CORNERS[0]] - pixels[FACE_SIZE_CORNERS[1]]))
         x0 = int(max(0, around_eyes[:, 0].min() - margin))
         x1 = int(min(w, around_eyes[:, 0].max() + margin))
@@ -1703,10 +1224,7 @@ class GazeEngine:
         return number, np.round(gray).astype(np.uint8), (x0, y0), pixels
 
     def get_eye_closeup(self, half_size=40, zoom=4):
-        """Returns a picture of both eyes side by side, enlarged `zoom`
-        times, with the glints marked in red and the pupils in blue, for
-        checking what the PCCR measurement is locking onto. None if no
-        face is currently detected."""
+        """Both eyes side by side, enlarged, glints in red and pupils in blue, or None."""
         with self._lock:
             eyes = self._latest_eyes
         if eyes is None:
@@ -1724,7 +1242,7 @@ class GazeEngine:
                     crop[ly, lx] = (255, 0, 0) if kind == "glint" else (0, 80, 255)
             crops.append(crop)
         both = np.concatenate(crops, axis=1)
-        # Enlarge: repeat every pixel `zoom` times down and across.
+        # Enlarge by repeating pixels.
         return np.repeat(np.repeat(both, zoom, axis=0), zoom, axis=1)
 
     def is_calibrated(self):
@@ -1735,14 +1253,8 @@ class GazeEngine:
 
     def add_calibration_point(self, fx, screen_x, vy=None, screen_y=None, iy=None, hx=None,
                               shakes=None, head_and_size=None):
-        """Stores one calibration dot's measurements. vy and hx are None
-        when no glint was seen at that dot. `shakes` is how much each of
-        (fx, vy, iy, hx) wobbled at the dot (standard deviation, None if
-        unknown), used to choose the fits (see _fit_axis). The face size
-        and head pose are stored too, as the references for the distance
-        and head-movement corrections: the current ones, or
-        `head_and_size` (from head_and_face_size) if the dot's readings
-        were taken earlier."""
+        """Stores one calibration dot: the measurements, their shakes, and the face size and head
+        pose (now, or head_and_size)."""
         head, face_size = head_and_size if head_and_size is not None else self.head_and_face_size()
         self._x_points.append((hx, fx, screen_x))
         self._x_heads.append(head)
@@ -1754,8 +1266,7 @@ class GazeEngine:
             self._y_heads.append(head)
 
     def head_and_face_size(self):
-        """(head pose, face size) right now, as add_calibration_point
-        stores them with a dot."""
+        """(head pose, face size) now, as stored with a dot."""
         with self._lock:
             face_size = self._latest_face_size
         return self.get_head(), face_size
@@ -1777,32 +1288,22 @@ class GazeEngine:
         self.updown_error_cm = None
 
     def get_pointer_shift(self):
-        """How far the pointer is being moved after the fits, (x, y) in
-        screen pixels (see set_pointer_shift)."""
+        """Re-centring shift (x, y) in screen pixels."""
         return self._pointer_shift
 
     def set_pointer_shift(self, x, y):
-        """Moves the gaze pointer by (x, y) screen pixels (y upwards, as in
-        Kivy), on top of the calibration's fits, from now on. Used by the
-        app's automatic re-centring (DRIFT_CORRECTION in main.py): after a
-        calibration, the pointer slowly slides off as the head settles,
-        mostly by the same amount all over the screen. A new calibration
-        starts again from (0, 0)."""
+        """Moves the gaze pointer by (x, y) screen pixels on top of the fits (re-centring in
+        main.py)."""
         self._pointer_shift = (float(x), float(y))
 
     def fit_calibration(self):
-        """Fits left/right and up/down (see _fit_axis): each uses the
-        glints, the iris or both, whichever fits the calibration dots best.
-
-        Returns a short text summary for the user, one line per
-        direction. Raises ValueError if the left/right fit isn't possible
-        or isn't good enough (e.g. no camera, or no face seen during
-        calibration)."""
+        """Fits left/right and up/down; returns a short summary. Raises ValueError if left/right
+        can't be fitted."""
         if len(self._x_points) < 2:
             raise ValueError(f"Need at least 2 calibration points, got {len(self._x_points)}")
-        self._pointer_shift = (0.0, 0.0)   # new fits: start again without re-centring
+        self._pointer_shift = (0.0, 0.0)  # new fits: no re-centring
 
-        # References for the distance and head-movement corrections.
+        # References for the distance and head corrections.
         self._centre_x = float(np.mean([p[2] for p in self._x_points]))
         if self._y_points:
             self._centre_y = float(np.mean([p[2] for p in self._y_points]))
@@ -1836,10 +1337,7 @@ class GazeEngine:
         return summary + f"\nUp/down fit {self._y_fit['r2']:.2f} ({self._y_fit['name']})"
 
     def _without_head_shift(self, points, heads, axis):
-        """The calibration points with each dot's target moved back by the
-        head's shift at that dot (axis 0 = x, 1 = y; see _head_shift).
-        The head moves a little during calibration too; without this,
-        those movements would be learned as if they were eye movements."""
+        """Calibration points with each target moved back by the head's shift at that dot."""
         if not HEAD_CORRECTION or self._calib_head is None or not self._calib_face_size:
             return points
         corrected = []
@@ -1851,8 +1349,7 @@ class GazeEngine:
         return corrected
 
     def _head_correction(self):
-        """The head's shift since calibration (see _head_shift), as (x, y)
-        screen pixels, or (0, 0) if the correction is off or unknown."""
+        """Head shift since calibration (x, y) in screen pixels, or (0, 0) if off."""
         head = self.get_head()
         with self._lock:
             face_size = self._latest_face_size
@@ -1861,8 +1358,7 @@ class GazeEngine:
         return _head_shift(head, self._calib_head, face_size, VIEWING_DISTANCE_CM * self._distance_scale())
 
     def _typical_shake(self, index):
-        """The typical (median) shake of measurement `index` of (fx, vy,
-        iy, hx) over the calibration dots, or 0 if unknown."""
+        """Median shake of measurement index over the dots, or 0."""
         values = [shakes[index] for shakes in self._shakes if shakes[index] is not None]
         return float(np.median(values)) if values else 0.0
 
@@ -1871,8 +1367,7 @@ class GazeEngine:
         return backup if backup is not None and backup["r2"] >= MIN_FIT_R2 else None
 
     def _distance_scale(self):
-        """distance now / distance during calibration, from the face size
-        (see the settings at the top). 1.0 if either size is unknown."""
+        """Distance now / distance during calibration, from the face size; 1.0 if unknown."""
         with self._lock:
             face_size = self._latest_face_size
         if self._calib_face_size is None or not face_size:
@@ -1881,8 +1376,7 @@ class GazeEngine:
         return min(high, max(low, self._calib_face_size / face_size))
 
     def get_screen_x(self):
-        """Returns the predicted screen X from the current gaze feature,
-        or None if not calibrated or no face is currently detected."""
+        """Predicted screen x, or None if not calibrated or no face."""
         if self._x_fit is None:
             return None
         feature = self.get_latest_feature()
@@ -1892,17 +1386,14 @@ class GazeEngine:
         x = _predict(self._x_fit, self._usable_backup(self._x_backup), hx, fx)
         if x is None:
             return None
-        # Distance correction: stretch or shrink around the middle.
+        # Distance correction.
         x = self._centre_x + (x - self._centre_x) * self._distance_scale()
-        # Head-movement correction (see HEAD_CORRECTION), and re-centring
-        # (see set_pointer_shift).
+        # Head correction and re-centring.
         return x + self._head_correction()[0] + self._pointer_shift[0]
 
     def get_screen_y(self):
-        """Returns the predicted screen Y (Kivy: 0 = bottom) from the
-        current up/down measurements, or None if up/down isn't
-        calibrated, no face is detected, or the fit uses the glints, no
-        glint is currently visible and the iris alone isn't good enough."""
+        """Predicted screen y (0 = bottom), or None if up/down isn't calibrated or can't be
+        measured now."""
         if self._y_fit is None:
             return None
         feature = self.get_latest_feature()
@@ -1912,8 +1403,7 @@ class GazeEngine:
         y = _predict(self._y_fit, self._usable_backup(self._y_backup), vy, iy)
         if y is None:
             return None
-        # Distance correction: stretch or shrink around the middle.
+        # Distance correction.
         y = self._centre_y + (y - self._centre_y) * self._distance_scale()
-        # Head-movement correction (see HEAD_CORRECTION), and re-centring
-        # (see set_pointer_shift).
+        # Head correction and re-centring.
         return y + self._head_correction()[1] + self._pointer_shift[1]
