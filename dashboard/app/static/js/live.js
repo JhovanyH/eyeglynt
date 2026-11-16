@@ -89,8 +89,8 @@
     }
     li.appendChild(txt);
 
-    // Navigation (researchers only): opening a group, Back, tabs, ... Left
-    // out of the metrics unless it is marked Incorrect.
+    // Navigation (shown to researchers only): opening a group, Back, tabs, ...
+    // Counted in the metrics like every other selection.
     if (s.type === "navigation") {
       li.classList.add("nav");
       txt.appendChild(document.createTextNode(" "));

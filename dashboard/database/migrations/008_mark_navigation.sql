@@ -1,9 +1,9 @@
 -- =====================================================================
 -- Migration 008 (2026-11-16): every row in the activity log can be marked.
 -- Navigation rows (opening a group, Back, tabs; researchers only) now have
--- the Incorrect and Unintended buttons too. A navigation row is left out
--- of the metrics unless it is marked Incorrect; then it counts as an
--- incorrect selection.
+-- the Incorrect and Unintended buttons too, and every button press now
+-- counts in the metrics like any other selection (unless it is marked
+-- Unintended).
 --
 -- Safe to run more than once. No data is changed. On the Pi it is run for
 -- you by setup_dashboard.sh. By hand:
@@ -49,7 +49,6 @@ LEFT JOIN (
   FROM selections x
   LEFT JOIN test_blocks b ON b.block_id = x.block_id
   WHERE x.intent_status <> 'ignored'
-    AND (x.selection_type <> 'navigation' OR x.intent_status = 'unintended')
   GROUP BY x.session_id
 ) sel ON sel.session_id = s.session_id
 LEFT JOIN (
