@@ -89,14 +89,12 @@
     }
     li.appendChild(txt);
 
-    // Navigation (researchers only): opening a group, Back, tabs, ... Not
-    // counted in the metrics, so there is nothing to mark.
+    // Navigation (researchers only): opening a group, Back, tabs, ... Left
+    // out of the metrics unless it is marked Incorrect.
     if (s.type === "navigation") {
       li.classList.add("nav");
       txt.appendChild(document.createTextNode(" "));
       txt.appendChild(el("span", "tag pill muted", "navigation"));
-      li.appendChild(el("span"));
-      return li;
     }
 
     const marks = el("span", "marks");
