@@ -99,7 +99,7 @@ class EyeGlyntDB:
                       gaze_xy: tuple[int, int] | None = None, target_element_id: str | None = None,
                       at: float | None = None) -> int | None:
         """Record one dwell-time activation. interface: 'keyboard'|'quickfire';
-        selection_type: 'key'|'shorthand'|'phrase'|'speak'|'control'."""
+        selection_type: 'key'|'shorthand'|'phrase'|'speak'|'control'|'navigation'."""
         s = self.active_session()
         if not s:
             return None

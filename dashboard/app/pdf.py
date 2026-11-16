@@ -112,6 +112,8 @@ def build_summary_pdf(s, m, checks, selections, alerts, anonymise=False, detaile
             note = "Unintended"
         elif r["selection_type"] == "speak":
             note = "Spoken"
+        elif r["selection_type"] == "navigation":
+            note = "Navigation (not counted)"
         elif r["target_element_id"] is not None:
             note = "Correct" if r["is_correct"] else f"Missed target {r['target_element_id']}"
         log.append([r["selected_at"].strftime("%H:%M:%S"),

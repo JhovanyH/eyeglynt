@@ -38,6 +38,7 @@ fi
 # Updates for a database made by an older version (safe to run every time).
 sudo mariadb < database/migrations/005_one_mode_ignore_https.sql
 sudo mariadb < database/migrations/006_dwell_options.sql
+sudo mariadb < database/migrations/007_navigation_selections.sql
 echo "Database is up to date."
 sudo mariadb < database/seed.sql
 

@@ -31,8 +31,8 @@ RETRY_AFTER = 10.0  # seconds
 GAZE_LOST_AFTER = 0.3  # seconds
 
 # Selections that only move around the screens (groups, categories, Back, tabs)
-# are not saved, so the Activity Log shows the user's words.
-NAVIGATION_ONLY_IN_FREE_LOOK = True
+# are saved as "navigation": researchers see them, caregivers don't, and the
+# metrics leave them out.
 
 VERSION = "eyeglynt-app"  # shown to researchers on the dashboard
 
@@ -111,18 +111,16 @@ class DashboardLink:
     def selection(self, interface, kind, element_id, text, category=None,
                   dwell_s=None, pointer=None, navigation=False):
         """Saves one selection. kind: "key", "shorthand", "phrase", "speak" or "control";
-        navigation=True for selections that only move around (see NAVIGATION_ONLY_IN_FREE_LOOK)."""
+        navigation=True for selections that only move around the screens."""
         if not self.enabled:
             return
         at = time.time()  # time of the selection, not of the save
         dwell_ms = None if dwell_s is None else int(round(dwell_s * 1000))
         gaze_xy = None if pointer is None else (int(round(pointer[0])), int(round(pointer[1])))
         if navigation:
-            kind = "control"
+            kind = "navigation"
 
         def job(db):
-            if navigation and NAVIGATION_ONLY_IN_FREE_LOOK and not self._in_free_look(db):
-                return
             db.log_selection(interface, kind, element_id, text, category=category,
                              dwell_ms=dwell_ms, gaze_xy=gaze_xy, at=at)
         self._do(job)
@@ -221,13 +219,6 @@ class DashboardLink:
             if db.active_session():
                 db.raise_alert(alert_type, message, **details)
         self._do(job)
-
-    def _in_free_look(self, db):
-        session = db.active_session()
-        if not session or session["mode"] != "test":
-            return False
-        block = db.active_test_block(session["session_id"])
-        return block is not None and block["block_type"] == "free_look"
 
     def _resume_session(self, db):
         session = db.active_session(force=True)
