@@ -1,35 +1,11 @@
-"""
-EyeGlynt <-> Caregiver Dashboard link
-=====================================
-Tells the caregiver dashboard (the "dashboard" folder: a website on this
-Pi that caregivers open on their phone) what happens on the device, and
-carries out the dashboard's buttons (Recalibrate, Stop calibration).
+"""Link between the app and the caregiver dashboard (the "dashboard" folder).
 
-The device and the dashboard never talk to each other directly. Both use
-the Pi's database (MariaDB), through dashboard/engine_bridge/eyeglynt_db.py.
-So if the dashboard stops working, the user can still communicate.
+Both sides only share the Pi's database (dashboard/engine_bridge/eyeglynt_db.py),
+so the app keeps working if the dashboard stops. Database work runs in a
+background thread. Selections are saved only during a caregiver's session.
+Without the dashboard (no dashboard/.env) or pymysql, the app runs as normal.
 
-All database work is done in the background (a separate thread), so a
-slow or broken database can never freeze the screen or the gaze pointer.
-If the dashboard isn't installed (no dashboard/.env file) or pymysql is
-missing, the app works exactly as before and prints one line saying so.
-
-Selections are only saved while a caregiver has a session running on the
-dashboard. Outside a session the device works normally and saves nothing.
-
-One-time setup on the Pi (after dashboard/setup_dashboard.sh), in the
-Terminal:
-    ~/eyeglynt_env/bin/pip install pymysql
-
-How main.py uses it:
-    dashboard.start()                      once, when the app starts
-    dashboard.selection(...)               every time a button is selected
-    dashboard.update(...)                  many times a second: device status
-    dashboard.take_commands()              the dashboard's button presses
-    dashboard.recalibration_started() / recalibration_finished(ok)
-    dashboard.recalibration_cancelled()    Stop calibration was pressed
-    dashboard.stop()                       when the app closes: the
-                                           dashboard then ends the session
+Setup on the Pi: ~/eyeglynt_env/bin/pip install pymysql
 """
 
 import os
@@ -41,30 +17,22 @@ import time
 # The dashboard folder, next to this file.
 DASHBOARD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboard")
 
-# How often the device tells the dashboard it is on (the "heartbeat").
-# The dashboard shows the device as offline after 10 s without one.
+# Heartbeat: the dashboard shows the device offline after 10 s without one.
 HEARTBEAT_EVERY = 2.0  # seconds
 
-# How often the device checks for dashboard button presses (Recalibrate, ...).
+# How often to check for dashboard button presses.
 COMMANDS_EVERY = 1.0  # seconds
 
-# After a database error, wait this long before trying again.
+# Wait after a database error.
 RETRY_AFTER = 10.0  # seconds
 
-# GAZE LOCK LOSS: when the eyes can't be found (the user closed them for a
-# while, looked away or moved out of the camera view) for GAZE_LOST_AFTER
-# seconds, the dashboard gets a "Gaze lock lost" alert. A shorter time
-# would raise an alert at every blink. The alert's "event" time is the
-# moment the eyes were first missing, so the dashboard's Detection Latency
-# is about GAZE_LOST_AFTER plus the time to process one camera picture.
+# "Gaze lock lost" alert after the eyes are missing this long (shorter would
+# alert at every blink).
 GAZE_LOST_AFTER = 0.3  # seconds
 
-# NAVIGATION SELECTIONS are the ones that only move around the screens:
-# opening a letter group or a Quick Fires category, Back, 123/ABC, Shift,
-# the KEYBOARD / QUICK FIRES tabs. They are saved as "navigation" so the
-# researcher's Activity Log shows every button the patient selected
-# (12 Nov); caregivers only see the selections that type, erase or speak,
-# and navigation selections are not counted in the metrics.
+# Selections that only move around the screens (groups, categories, Back, tabs)
+# are saved as "navigation": researchers see them, caregivers don't, and the
+# metrics leave them out.
 
 VERSION = "eyeglynt-app"  # shown to researchers on the dashboard
 
@@ -91,17 +59,17 @@ class DashboardLink:
     def __init__(self):
         self.enabled = False
         self._db = None
-        self._jobs = queue.Queue()      # database work, done one by one in the background
-        self._commands = queue.Queue()  # dashboard button presses, for the app to carry out
-        self._status = ("idle", None)   # (tracking state, fps) sent with the next heartbeat
+        self._jobs = queue.Queue()  # database jobs, run in the background
+        self._commands = queue.Queue()  # dashboard button presses
+        self._status = ("idle", None)  # (state, fps) for the next heartbeat
         self._lost_since = None         # when the eyes were first missing, or None
-        self._lost_alerted = False      # True once "Gaze lock lost" has been sent
-        self._recal_id = None           # the recalibration being recorded, or None
-        self._recal_open = False        # True from recalibration_started() to _finished()
-        self._failing = False           # True while the database can't be reached
+        self._lost_alerted = False  # True once "Gaze lock lost" was sent
+        self._recal_id = None  # recalibration being recorded
+        self._recal_open = False  # between recalibration_started() and _finished()
+        self._failing = False  # True while the database can't be reached
         self._stopped = threading.Event()
 
-    # ---- starting and stopping -----------------------------------------
+    # ---- starting and stopping ----
     def start(self):
         """Connects to the dashboard's database, if the dashboard is installed."""
         env_file = os.path.join(DASHBOARD_DIR, ".env")
@@ -110,8 +78,7 @@ class DashboardLink:
                   "running without it")
             return
         try:
-            # The bridge file is in dashboard/engine_bridge. Added at the END
-            # of Python's search path, so it can't hide any other module.
+            # The bridge is in dashboard/engine_bridge (added at the end of the path).
             if DASHBOARD_DIR not in sys.path:
                 sys.path.append(DASHBOARD_DIR)
             from engine_bridge.eyeglynt_db import EyeGlyntDB
@@ -120,21 +87,19 @@ class DashboardLink:
                   "~/eyeglynt_env/bin/pip install pymysql")
             return
         env = _read_env(env_file)
-        # The gaze app logs in with the "engine" account, which may only add
-        # events and read the dashboard's commands.
+        # The "engine" account may only add events and read commands.
         self._db = EyeGlyntDB(host=env.get("DB_HOST"), port=env.get("DB_PORT"),
                               user=env.get("ENGINE_DB_USER"),
                               password=env.get("ENGINE_DB_PASSWORD", ""),
                               database=env.get("DB_NAME"))
         self.enabled = True
-        # If the app was restarted during a session, use that session's dwell time.
+        # After a restart during a session, use its dwell time.
         self._do(self._resume_session)
         threading.Thread(target=self._background, daemon=True).start()
         print("[Dashboard] Connected: the caregiver dashboard will show this device")
 
     def stop(self):
-        """Tells the dashboard the app is closing (waits at most 2 seconds).
-        The dashboard then ends the running session by itself."""
+        """Tells the dashboard the app is closing (waits at most 2 s)."""
         if not self.enabled or self._failing:
             return
         self._status = ("closed", None)
@@ -142,21 +107,14 @@ class DashboardLink:
         self._do(lambda db: self._stopped.set())
         self._stopped.wait(timeout=2.0)
 
-    # ---- called by the app -----------------------------------------------
+    # ---- called by the app ----
     def selection(self, interface, kind, element_id, text, category=None,
                   dwell_s=None, pointer=None, navigation=False):
-        """
-        Saves one dwell selection.
-          interface   "keyboard" or "quickfire"
-          kind        "key", "shorthand", "phrase", "speak" or "control"
-          element_id  which button, e.g. "kb:A", "kb:speak", "qf:pain:myheadhurts"
-          text        what the caregiver reads in the Activity Log
-          navigation  True for a selection that only moves around the
-                      screens (saved as "navigation", see above)
-        """
+        """Saves one selection. kind: "key", "shorthand", "phrase", "speak" or "control";
+        navigation=True for selections that only move around the screens."""
         if not self.enabled:
             return
-        at = time.time()  # the moment of the selection, not of the database save
+        at = time.time()  # time of the selection, not of the save
         dwell_ms = None if dwell_s is None else int(round(dwell_s * 1000))
         gaze_xy = None if pointer is None else (int(round(pointer[0])), int(round(pointer[1])))
         if navigation:
@@ -168,20 +126,14 @@ class DashboardLink:
         self._do(job)
 
     def update(self, state, fps=None, eyes_seen=True):
-        """
-        Called many times a second with what the device is doing:
-          state      "tracking" (keyboard or Quick Fires on screen),
-                     "calibrating" or "idle" (no camera)
-          eyes_seen  False while the gaze engine can't find the eyes
-        Sends "Gaze lock lost" / "Gaze lock restored" alerts (see
-        GAZE_LOST_AFTER) and keeps the heartbeat's status up to date.
-        """
+        """Called often with the device state ("tracking", "calibrating" or "idle"); sends gaze
+        lost/restored alerts and updates the heartbeat."""
         if not self.enabled:
             return
         now = time.time()
         if state == "tracking" and not eyes_seen:
             if self._lost_since is None:
-                self._lost_since = now  # the first moment without the eyes
+                self._lost_since = now  # first moment without the eyes
             if not self._lost_alerted and now - self._lost_since >= GAZE_LOST_AFTER:
                 self._lost_alerted = True
                 event_at = self._lost_since
@@ -198,9 +150,7 @@ class DashboardLink:
         self._status = (state, fps)
 
     def take_commands(self):
-        """The dashboard's button presses since the last call, as a list of
-        (command, details) pairs, e.g. ("recalibrate", {}) or
-        ("cancel_recalibration", {})."""
+        """Dashboard button presses since the last call, as (command, details) pairs."""
         found = []
         while True:
             try:
@@ -209,19 +159,17 @@ class DashboardLink:
                 return found
 
     def recalibration_started(self, source="manual_caregiver"):
-        """Records a recalibration (Recalibration Success Rate). source:
-        manual_caregiver (the dashboard's button), manual_user, auto_gaze_loss,
-        auto_lighting or auto_drift."""
+        """Records a recalibration; source is what started it (e.g. "manual_caregiver")."""
         if not self.enabled or self._recal_open:
             return
         self._recal_open = True
 
         def job(db):
-            self._recal_id = db.start_recalibration(source)  # None if no session is running
+            self._recal_id = db.start_recalibration(source)  # None if no session
         self._do(job)
 
     def recalibration_finished(self, success):
-        """Ends the recalibration recorded by recalibration_started(), if any."""
+        """Ends the recalibration started by recalibration_started(), if any."""
         if not self.enabled or not self._recal_open:
             return
         self._recal_open = False
@@ -233,9 +181,7 @@ class DashboardLink:
         self._do(job)
 
     def recalibration_cancelled(self):
-        """Stop calibration was pressed on the dashboard: the recalibration
-        is closed without a result, so it doesn't count in the
-        Recalibration Success Rate (neither a success nor a failure)."""
+        """Stop calibration: close the recalibration without a result."""
         if not self.enabled:
             return
         self._recal_open = False
@@ -249,13 +195,26 @@ class DashboardLink:
                                severity="info")
         self._do(job)
 
-    # ---- background work ---------------------------------------------------
+    def calibration_gave_up(self, tries):
+        """Calibration was poor tries times in a row: fail the recalibration, or raise a
+        "Calibration required" alert (during a session)."""
+        if not self.enabled:
+            return
+        if self._recal_open:
+            self.recalibration_finished(False)
+            return
+        self._alert("calibration_required",
+                    f"Calibration was poor {tries} times in a row: check the user's position "
+                    "(about 40 cm from the camera) and the lighting, then press Recalibrate",
+                    severity="critical")
+
+    # ---- background work ----
     def _do(self, job):
-        """Hands a piece of database work to the background thread."""
+        """Hands database work to the background thread."""
         self._jobs.put(job)
 
     def _alert(self, alert_type, message, **details):
-        """Sends an alert, but only while a session is running."""
+        """Sends an alert, only during a session."""
         def job(db):
             if db.active_session():
                 db.raise_alert(alert_type, message, **details)
@@ -267,10 +226,9 @@ class DashboardLink:
             self._commands.put(("set_dwell_time", {"dwell_time_ms": session["dwell_time_ms"]}))
 
     def _background(self):
-        """Runs for as long as the app is open: heartbeats, dashboard
-        commands, and the waiting database work, in that order."""
+        """Background loop: heartbeats, dashboard commands, then waiting database jobs."""
         next_heartbeat = next_commands = 0.0
-        while not self._stopped.is_set():   # set by stop(): the app is closing
+        while not self._stopped.is_set():  # set by stop()
             try:
                 now = time.time()
                 if now >= next_heartbeat:
@@ -291,12 +249,11 @@ class DashboardLink:
                 job(self._db)
                 self._failing = False
             except Exception as e:
-                # Database not running, wrong password, ... The app keeps
-                # working; the dashboard just doesn't get this information.
+                # Database unreachable: the app keeps working without the dashboard.
                 self._failing = True
                 print(f"[Dashboard] Database problem ({e}); trying again in {RETRY_AFTER:.0f} s")
                 time.sleep(RETRY_AFTER)
 
 
-# The one link the whole app shares: "from dashboard_link import dashboard".
+# Shared by the whole app: from dashboard_link import dashboard
 dashboard = DashboardLink()

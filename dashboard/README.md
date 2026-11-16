@@ -52,7 +52,7 @@ To generate a `SECRET_KEY`, run `python3 -c "import secrets; print(secrets.token
 ```bash
 python run.py                      # development
 # or
-gunicorn -w 2 -b 0.0.0.0:5000 run:app
+gunicorn -w 2 -k gthread --threads 8 --keep-alive 5 -b 0.0.0.0:5000 run:app
 ```
 
 To open the dashboard from a phone on the same Wi-Fi:
@@ -171,7 +171,7 @@ After=network.target mariadb.service
 [Service]
 User=pi
 WorkingDirectory=/home/pi/eyeglynt-dashboard
-ExecStart=/home/pi/eyeglynt-dashboard/venv/bin/gunicorn -w 2 -b 0.0.0.0:5000 run:app
+ExecStart=/home/pi/eyeglynt-dashboard/venv/bin/gunicorn -w 2 -k gthread --threads 8 --keep-alive 5 -b 0.0.0.0:5000 run:app
 Restart=always
 
 [Install]

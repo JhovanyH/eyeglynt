@@ -1,20 +1,7 @@
-"""
-EyeGlynt - Icons
-================
-Draws the small icons used in the Figure 29 design (keyboard, flame,
-speaker, erase, arrows, house) with Kivy's own drawing instructions.
+"""Icons drawn with Kivy shapes (keyboard, flame, speaker, erase, arrows, house, moon).
 
-Why draw them instead of using image files:
-  - no image assets to download, license, or keep in sync between the
-    laptop and the Pi;
-  - they scale cleanly to any button size, since they are shapes,
-    not pixels;
-  - their colour can follow the button they sit on.
-
-How it works: every icon is described inside a unit square, where
-(0, 0) is the bottom-left corner and (1, 1) the top-right (Kivy's y
-axis points UP). draw_icon() fits that square into the space given and
-scales every coordinate to pixels.
+Each icon is drawn in a unit square ((0, 0) bottom left, (1, 1) top right) and
+scaled to the button, so it needs no image files and takes the button's colours.
 """
 
 from math import cos, pi, sin
@@ -23,19 +10,14 @@ from kivy.graphics import Color, Ellipse, Line, Mesh, Rectangle, Triangle
 
 
 def draw_icon(group, kind, x, y, w, h, color, bg_color):
-    """Adds the instructions for icon `kind` to the InstructionGroup `group`.
-
-    The icon is drawn as large as fits, centred, inside the box (x, y, w, h).
-    `color` is the icon colour; `bg_color` is the colour of the button
-    underneath, used for "cut-out" details such as the flame's inner
-    tongue or the house's door.
-    """
+    """Adds icon kind to group, as large as fits and centred in (x, y, w, h). bg_color is used for
+    cut-out details."""
     side = min(w, h)
-    ox = x + (w - side) / 2  # bottom-left corner of the square icon area
+    ox = x + (w - side) / 2  # bottom-left of the icon square
     oy = y + (h - side) / 2
 
     def p(u, v):
-        """Converts a unit-square point (u, v) into pixel coordinates."""
+        """Unit-square point (u, v) to pixels."""
         return ox + u * side, oy + v * side
 
     drawer = _ICONS.get(kind)
@@ -46,8 +28,7 @@ def draw_icon(group, kind, x, y, w, h, color, bg_color):
 
 
 # ---------------------------------------------------------------------
-# Individual icons. Each receives the group to draw into, the p() point
-# converter, the icon's side length in pixels, and the two colours.
+# Icons: each gets the group, p(), the icon's side in pixels and the colours.
 # ---------------------------------------------------------------------
 
 def _keyboard(group, p, side, color, bg):
@@ -68,13 +49,8 @@ def _keyboard(group, p, side, color, bg):
 
 
 def _teardrop(p, cx, cy, half_w, half_h, n=48):
-    """Vertices for a filled teardrop (pointed top, round bottom).
-
-    Uses the curve x = sin(t) * sin(t/2), y = cos(t): at t = 0 it comes
-    to a point (the flame's tip), and near t = pi it is round (the base).
-    Returned in Mesh format: x, y, u, v for each vertex, with the centre
-    first so the shape can be drawn as a triangle fan.
-    """
+    """Mesh vertices (x, y, u, v) for a filled teardrop (pointed top, round bottom), centre
+    first."""
     centre = p(cx, cy - half_h * 0.3)
     verts = [centre[0], centre[1], 0, 0]
     for i in range(n + 1):
@@ -86,10 +62,7 @@ def _teardrop(p, cx, cy, half_w, half_h, n=48):
     return verts
 
 
-# Outline of a flame with a tall centre tongue and a small tongue on
-# each side, listed anticlockwise from the bottom. Every point can be
-# "seen" from FLAME_CENTRE, which lets the shape be filled as a fan of
-# triangles around that centre.
+# Flame outline with three tongues, anticlockwise from the bottom (filled as a fan).
 FLAME_OUTLINE = [
     (0.50, 0.05), (0.66, 0.08), (0.77, 0.17), (0.83, 0.29), (0.84, 0.41), (0.82, 0.52),
     (0.88, 0.74),                                   # right tongue tip
@@ -125,8 +98,7 @@ def _speak(group, p, side, color, bg):
     # Head.
     hx, hy = p(0.12, 0.5)
     group.add(Ellipse(pos=(hx, hy), size=(0.3 * side, 0.3 * side)))
-    # Shoulders: the top half of an ellipse (Kivy measures angles
-    # clockwise from 12 o'clock, so -90..90 is the upper half).
+    # Shoulders: the top half of an ellipse (angles -90..90).
     sx, sy = p(0.0, 0.06)
     group.add(Ellipse(pos=(sx, sy), size=(0.54 * side, 0.4 * side), angle_start=-90, angle_end=90))
     # Two sound waves, clear of the head.
@@ -137,7 +109,7 @@ def _speak(group, p, side, color, bg):
 
 
 def _erase(group, p, side, color, bg):
-    # The backspace key shape: a box with a pointed left end, and an X.
+    # Backspace shape: a box with a pointed left end, and an X.
     pts = []
     for u, v in ((0.06, 0.5), (0.3, 0.76), (0.92, 0.76), (0.92, 0.24), (0.3, 0.24)):
         pts += p(u, v)
@@ -151,6 +123,18 @@ def _arrow_left(group, p, side, color, bg):
     group.add(Triangle(points=[*p(0.06, 0.5), *p(0.44, 0.84), *p(0.44, 0.16)]))
     x0, y0 = p(0.42, 0.36)
     group.add(Rectangle(pos=(x0, y0), size=(0.52 * side, 0.28 * side)))
+
+
+def _arrow_up(group, p, side, color, bg):
+    group.add(Triangle(points=[*p(0.5, 0.94), *p(0.16, 0.56), *p(0.84, 0.56)]))
+    x0, y0 = p(0.36, 0.06)
+    group.add(Rectangle(pos=(x0, y0), size=(0.28 * side, 0.52 * side)))
+
+
+def _arrow_down(group, p, side, color, bg):
+    group.add(Triangle(points=[*p(0.5, 0.06), *p(0.16, 0.44), *p(0.84, 0.44)]))
+    x0, y0 = p(0.36, 0.42)
+    group.add(Rectangle(pos=(x0, y0), size=(0.28 * side, 0.52 * side)))
 
 
 def _shift(group, p, side, color, bg):
@@ -169,12 +153,24 @@ def _home(group, p, side, color, bg):
     group.add(Rectangle(pos=(dx, dy), size=(0.18 * side, 0.24 * side)))
 
 
+def _moon(group, p, side, color, bg):
+    # Crescent: a circle with a button-coloured circle over its upper right.
+    x0, y0 = p(0.1, 0.1)
+    group.add(Ellipse(pos=(x0, y0), size=(0.8 * side, 0.8 * side)))
+    group.add(Color(*bg))
+    x1, y1 = p(0.32, 0.3)
+    group.add(Ellipse(pos=(x1, y1), size=(0.66 * side, 0.66 * side)))
+
+
 _ICONS = {
     "keyboard": _keyboard,
     "flame": _flame,
     "speak": _speak,
     "erase": _erase,
     "arrow_left": _arrow_left,
+    "arrow_up": _arrow_up,
+    "arrow_down": _arrow_down,
     "shift": _shift,
     "home": _home,
+    "moon": _moon,
 }
