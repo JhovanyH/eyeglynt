@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import queue
+import re
 import shutil
 import subprocess
 import threading
@@ -1554,6 +1555,18 @@ SAVE_EYE_PICTURES = True
 EYE_PICTURES_PER_DOT = 6
 LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
 
+
+def log_name(summary, when):
+    """Log file name from the result, e.g. "2026-11-16/17-29-11_Good_1.4cm.csv"."""
+    title = summary.split("\n")[0]
+    rating = ("Good" if title.endswith(": Good") else "OK" if title.endswith(": OK")
+              else "Poor" if "Poor" in title else "Failed" if "did not work" in title
+              else "NoTest")
+    off = re.search(r"([\d.]+) cm off", summary)
+    result = f"{rating}_{off.group(1)}cm" if off else rating
+    return time.strftime("%Y-%m-%d/%H-%M-%S", when) + f"_{result}.csv"
+
+
 GREEN_TEXT = rgb(120, 220, 120)  # "Face detected"
 RED_TEXT = rgb(255, 120, 120)  # "Face not detected"
 AMBER_TEXT = rgb(255, 200, 90)  # "OK" result
@@ -2155,12 +2168,12 @@ class CalibrationScreen(Screen):
             self._retry_event = None
 
     def _save_log(self):
-        """Saves every reading to logs/gaze_<date>_<time>.csv; returns its name or ""."""
+        """Saves every reading to logs/<date>/<time>_<result>.csv; returns its name or ""."""
         if not self.log_rows:
             return ""
         try:
-            os.makedirs(LOG_DIR, exist_ok=True)
-            name = time.strftime("gaze_%Y%m%d_%H%M%S.csv")
+            name = log_name(self.summary, time.localtime())
+            os.makedirs(os.path.dirname(os.path.join(LOG_DIR, name)), exist_ok=True)
             with open(os.path.join(LOG_DIR, name), "w", newline="") as f:
                 writer = csv.writer(f)
                 writer.writerow(["stage", "dot", "dot_x", "dot_y", "seconds",
