@@ -1517,8 +1517,8 @@ COUNTDOWN_SECONDS = 3  # 3, 2, 1
 FOCUS_WAIT_SECONDS = 10
 # Best distance from the camera; the READY stage asks the user to move if more
 # than DISTANCE_TOLERANCE_CM off.
-BEST_DISTANCE_CM = 40
-DISTANCE_TOLERANCE_CM = 7
+BEST_DISTANCE_CM = 43
+DISTANCE_TOLERANCE_CM = 3  # advice below 40 cm or above 46 cm
 RESULT_SECONDS = 10  # seconds the result stays on screen
 # A Poor or failed result restarts calibration, up to CALIBRATION_TRIES times;
 # then the app goes on and alerts the caregiver.
