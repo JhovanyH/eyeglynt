@@ -735,6 +735,8 @@ class GazeManager:
                 self.on_row_mode(wanted)
         buttons = [btn for btn in _find_dwell_buttons(active_screen)
                    if not btn.disabled and btn.selectable]  # disabled or display-only
+        if active_screen.name == "calibration" and self._gaze_pos() is None:
+            buttons = []  # Start: eyes or a tap only, never a resting mouse
         self._update_rows(active_screen, buttons)
         pos = self.get_pointer_pos()
         if self.gaze_lost():
@@ -1679,7 +1681,7 @@ class CalibrationScreen(Screen):
         self.target_index = 0
         self.log_rows = []
         self.test_results = []
-        self.gaze_engine.clear_calibration()
+        # The old calibration stays on until Start, so Start can be picked with the eyes.
         self.stage = "ready"
         self._leaving = False
         self._hide_dot()
@@ -1745,7 +1747,7 @@ class CalibrationScreen(Screen):
         else:
             # Glints are optional: without them the iris is used.
             glints = "IR glints seen" if feature[1] is not None else "no IR glints (the iris will be used)"
-            advice, color = "Press Start when you are ready", GREEN_TEXT
+            advice, color = "Look at Start or tap it when you are ready", GREEN_TEXT
             if distance is not None:
                 glints += f", {distance:.0f} cm from the camera"
                 # Advice only; Start still works.
@@ -1782,6 +1784,7 @@ class CalibrationScreen(Screen):
         if self.stage != "ready":
             return  # already started
         self.stage = "countdown"
+        self.gaze_engine.clear_calibration()
         # Focus once more now that the user is in place.
         self.gaze_engine.request_focus()
         self._stop_preview()

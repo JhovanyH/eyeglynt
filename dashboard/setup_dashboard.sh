@@ -40,6 +40,7 @@ sudo mariadb < database/migrations/005_one_mode_ignore_https.sql
 sudo mariadb < database/migrations/006_dwell_options.sql
 sudo mariadb < database/migrations/007_navigation_selections.sql
 sudo mariadb < database/migrations/008_mark_navigation.sql
+sudo mariadb < database/migrations/009_refresh_saved_metrics.sql
 echo "Database is up to date."
 sudo mariadb < database/seed.sql
 
